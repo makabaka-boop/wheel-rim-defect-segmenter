@@ -295,6 +295,64 @@ def test_compensated_threshold_exact_point_detects_single_point_segment():
     assert point["correctedAmplitude"] == pytest.approx(0.2)
 
 
+def test_compensated_margin_below_one_billionth_still_detects_segment():
+    # Build the body as raw text so the 10-decimal tokens reach the API
+    # without a round-trip through Python binary floats.
+    samples = [
+        {"angle": angle, "amplitude": 0.3 if angle == 0 else 0.0}
+        for angle in range(360)
+    ]
+    baseline = [
+        {"angle": angle, "value": 0.0999999998 if angle == 0 else 0.0}
+        for angle in range(360)
+    ]
+    body = (
+        '{"threshold": 0.2000000001, '
+        f'"samples": {json.dumps(samples)}, '
+        f'"baseline": {json.dumps(baseline)}}'
+    )
+
+    response = client.post(
+        "/api/readings/analyze",
+        content=body,
+        headers={"Content-Type": "application/json"},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data["segments"]) == 1
+    segment = data["segments"][0]
+    assert segment["span"] == 1
+    assert segment["startAngle"] == 0
+    assert segment["peakAmplitude"] == pytest.approx(0.2000000002)
+    assert data["points"][0]["correctedAmplitude"] == pytest.approx(0.2000000002)
+
+
+def test_compensated_margin_below_threshold_does_not_false_alarm():
+    samples = [
+        {"angle": angle, "amplitude": 0.3 if angle == 0 else 0.0}
+        for angle in range(360)
+    ]
+    baseline = [
+        {"angle": angle, "value": 0.0999999998 if angle == 0 else 0.0}
+        for angle in range(360)
+    ]
+    body = (
+        '{"threshold": 0.2000000003, '
+        f'"samples": {json.dumps(samples)}, '
+        f'"baseline": {json.dumps(baseline)}}'
+    )
+
+    response = client.post(
+        "/api/readings/analyze",
+        content=body,
+        headers={"Content-Type": "application/json"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["segments"] == []
+
+
 def test_huge_integer_baseline_value_is_localized_not_crashing():
     payload = compensated_payload()
     payload["baseline"][7]["value"] = 10**400

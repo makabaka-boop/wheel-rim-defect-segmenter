@@ -3,13 +3,14 @@
 from collections.abc import Mapping
 from dataclasses import dataclass
 import math
+from decimal import Decimal
 
-from .core import Reading
+from .core import Number, Reading
 
 
 @dataclass(frozen=True)
 class ValidatedPayload:
-    threshold: float
+    threshold: Number
     readings: list[Reading]
     baseline_applied: bool = False
 
@@ -19,15 +20,15 @@ def field_error(field: str, message: str) -> dict[str, str]:
 
 
 def is_finite_number(value: object) -> bool:
-    # Integers larger than the float range (e.g. 10**400) make
-    # math.isfinite raise OverflowError; treat them as invalid so validation
-    # keeps running and reports the offending field instead of crashing the
-    # request with a 500.
+    # Integers larger than the float range (e.g. 10**400) and large Decimals
+    # make math.isfinite raise OverflowError; treat them as invalid so
+    # validation keeps running and reports the offending field instead of
+    # crashing the request with a 500.
     try:
         return (
-            isinstance(value, (int, float))
+            isinstance(value, (int, float, Decimal))
             and not isinstance(value, bool)
-            and math.isfinite(value)
+            and math.isfinite(value)  # type: ignore[arg-type]
         )
     except OverflowError:
         return False
@@ -106,7 +107,7 @@ def validate_payload(
                         )
                     )
 
-    baseline_by_angle: dict[int, float] | None = None
+    baseline_by_angle: dict[int, Number] | None = None
     if "baseline" in raw:
         baseline_by_angle = {}
         baseline = raw["baseline"]
@@ -166,7 +167,7 @@ def validate_payload(
 
         if not errors:
             baseline_by_angle = {
-                int(item["angle"]): float(item["value"]) for item in baseline
+                int(item["angle"]): item["value"] for item in baseline
             }
 
     if errors:
@@ -176,7 +177,7 @@ def validate_payload(
         (
             Reading(
                 angle=int(item["angle"]),
-                amplitude=float(item["amplitude"]),
+                amplitude=item["amplitude"],
                 baseline=(
                     baseline_by_angle[int(item["angle"])]
                     if baseline_by_angle is not None
@@ -188,7 +189,7 @@ def validate_payload(
         key=lambda reading: reading.angle,
     )
     return ValidatedPayload(
-        threshold=float(raw["threshold"]),
+        threshold=raw["threshold"],
         readings=readings,
         baseline_applied=baseline_by_angle is not None,
     ), []

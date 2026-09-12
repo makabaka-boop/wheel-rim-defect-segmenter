@@ -164,6 +164,35 @@ def test_live_compensated_threshold_exact_point_is_single_segment():
     assert segment[0]["peakAmplitude"] == pytest.approx(0.2)
 
 
+def test_live_compensated_margin_below_one_billionth_still_detects():
+    samples = [
+        {"angle": angle, "amplitude": 0.3 if angle == 0 else 0.0}
+        for angle in range(360)
+    ]
+    baseline = [
+        {"angle": angle, "value": 0.0999999998 if angle == 0 else 0.0}
+        for angle in range(360)
+    ]
+    body = (
+        '{"threshold": 0.2000000001, '
+        f'"samples": {json.dumps(samples)}, '
+        f'"baseline": {json.dumps(baseline)}}'
+    )
+
+    response = httpx.post(
+        f"{API_URL}/api/readings/analyze",
+        content=body,
+        headers={"Content-Type": "application/json"},
+        timeout=10,
+    )
+
+    assert response.status_code == 200
+    segments = response.json()["segments"]
+    assert len(segments) == 1
+    assert segments[0]["span"] == 1
+    assert segments[0]["peakAmplitude"] == pytest.approx(0.2000000002)
+
+
 def test_live_huge_integer_baseline_value_returns_field_error():
     bad = compensated_payload()
     bad["baseline"][7]["value"] = 10**400

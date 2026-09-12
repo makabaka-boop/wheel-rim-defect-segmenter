@@ -172,6 +172,14 @@ def test_corrected_amplitude_clamps_at_zero_and_passes_through_without_baseline(
     assert corrected_amplitude(1.2, 1.2) == 0.0
 
 
+def test_corrected_amplitude_subtraction_is_decimal_exact():
+    from decimal import Decimal
+
+    assert corrected_amplitude(0.3, 0.1) == Decimal("0.2")
+    assert corrected_amplitude(0.3, 0.0999999998) == Decimal("0.2000000002")
+    assert isinstance(corrected_amplitude(0.3, None), float)
+
+
 def test_baseline_suppresses_background_noise_below_threshold():
     readings = make_compensated_readings(
         default=2.9,
@@ -241,6 +249,7 @@ def test_readings_without_baseline_report_no_peak_extras():
 def test_corrected_amplitude_threshold_exact_boundary_survives_float_residue():
     # 0.3 - 0.1 is 0.19999999999999998 in binary floats; the threshold-exact
     # critical point must still count as a single-point defective segment.
+    # Baseline subtraction therefore runs in exact decimal arithmetic.
     readings = [
         Reading(angle=0, amplitude=0.3, baseline=0.1),
         *[
@@ -260,6 +269,40 @@ def test_corrected_amplitude_threshold_exact_boundary_survives_float_residue():
     assert segment.peak_amplitude == pytest.approx(0.2)
     assert segment.peak_raw_amplitude == pytest.approx(0.3)
     assert segment.peak_baseline == pytest.approx(0.1)
+
+
+def test_corrected_amplitude_barely_above_threshold_below_one_billionth():
+    # Exceeding the threshold by less than 1e-9 must still open a segment;
+    # coarse rounding onto a 1e-9 grid previously erased the difference.
+    readings = [
+        Reading(angle=0, amplitude=0.3, baseline=0.0999999998),
+        *[
+            Reading(angle=angle, amplitude=0.0, baseline=0.0)
+            for angle in range(1, 360)
+        ],
+    ]
+
+    segments = find_segments(readings, 0.2000000001)
+
+    assert len(segments) == 1
+    segment = segments[0]
+    assert segment.span == 1
+    assert segment.start_angle == 0
+    assert segment.peak_amplitude == pytest.approx(0.2000000002)
+    assert segment.peak_amplitude > 0.2000000001
+
+
+def test_corrected_amplitude_barely_below_threshold_does_not_false_alarm():
+    readings = [
+        Reading(angle=0, amplitude=0.3, baseline=0.0999999998),
+        *[
+            Reading(angle=angle, amplitude=0.0, baseline=0.0)
+            for angle in range(1, 360)
+        ],
+    ]
+
+    # corrected = 0.2000000002, threshold 1e-10 higher -> still non-defective
+    assert find_segments(readings, 0.2000000003) == []
 
 
 def test_core_rejects_illegal_baseline():
