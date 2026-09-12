@@ -15,7 +15,17 @@
 - 峰值取段内最大幅值；峰值并列时取最小角度。
 - 当 360 点全部超限时，唯一结果固定为：起点 `0`、终点 `359`、跨度 `360`。
 
-页面默认载入跨零度样例：`357°..359°` 与 `0°..2°` 均超限。计算结果只有一个连续区段，起点 `357°`、终点 `2°`、跨度 `6`，可从原始读数逐项复算。
+## 可选基线补偿
+
+现场复核时探头与轮辋耦合会形成稳定的角度底噪。检修员可随采样一并提交 `baseline` 数组做逐点补偿：
+
+- `baseline` 为可选字段；一旦提交，必须恰好包含 **360 条**，`baseline[*].angle` 为 `0..359` 内互不重复的整数，`baseline[*].value` 为非负有限数字。
+- 校验层按角度把基线与采样配对；核心算法以 `max(0, 原幅值 - 基线)` 参与阈值比较、跨零合段和峰值判定。
+- 提交基线后，响应附带 `baselineApplied: true`、逐点 `points`（原幅值、基线、校正幅值），区段额外返回 `peakRawAmplitude` 与 `peakBaseline`，`peakAmplitude` 为校正峰值。
+- 不提交 `baseline` 的旧载荷完全按原算法返回原有字段（`baselineApplied: false`，无 `points`）。
+- 基线缺失角度、重复角度或非法数值会定位到 `baseline` / `baseline[i].angle` / `baseline[i].value` 字段并返回 422，前端清空本次结果与高亮。
+
+页面默认载入带基线的跨零度样例：`357°..359°` 与 `0°..2°` 的校正幅值均超限。计算结果只有一个连续区段，起点 `357°`、终点 `2°`、跨度 `6`，峰值角 `0°` 的原幅值 `5.1`、基线 `0.3`、校正幅值 `4.8`，可从响应的逐点 `points` 逐项复算。
 
 ## 技术栈
 
@@ -56,19 +66,23 @@ WEB_PORT=18080 API_PORT=18000 docker compose up --build
 
 ### `POST /api/readings/analyze`
 
-请求：
+请求（`baseline` 可选）：
 
 ```json
 {
   "threshold": 2.5,
   "samples": [
-    { "angle": 0, "amplitude": 4.8 },
-    { "angle": 1, "amplitude": 3.2 }
+    { "angle": 0, "amplitude": 5.1 },
+    { "angle": 1, "amplitude": 5.18 }
+  ],
+  "baseline": [
+    { "angle": 0, "value": 0.3 },
+    { "angle": 1, "value": 0.38 }
   ]
 }
 ```
 
-成功响应中的每个区段：
+成功响应中的每个区段（提交基线时附带峰值三元组）：
 
 ```json
 {
@@ -77,7 +91,20 @@ WEB_PORT=18080 API_PORT=18000 docker compose up --build
   "span": 6,
   "peakAngle": 0,
   "peakAmplitude": 4.8,
+  "peakRawAmplitude": 5.1,
+  "peakBaseline": 0.3,
   "angles": [357, 358, 359, 0, 1, 2]
+}
+```
+
+响应顶层同时返回 `baselineApplied` 与逐点 `points`：
+
+```json
+{
+  "angle": 0,
+  "amplitude": 5.1,
+  "baseline": 0.3,
+  "correctedAmplitude": 4.8
 }
 ```
 
@@ -87,12 +114,13 @@ WEB_PORT=18080 API_PORT=18000 docker compose up --build
 {
   "errors": [
     { "field": "samples[12].angle", "message": "角度 7 重复，0 至 359 每个角度只能出现一次" },
-    { "field": "samples[30].amplitude", "message": "amplitude 必须是非负数" }
+    { "field": "samples[30].amplitude", "message": "amplitude 必须是非负数" },
+    { "field": "baseline[8].value", "message": "value 必须是非负数" }
   ]
 }
 ```
 
-后端会定位缺失、重复、越界、非整数、非法幅值和非法阈值字段；前端收到校验错误时会清空本次结果和图形高亮。
+后端会定位缺失、重复、越界、非整数、非法幅值、非法阈值和非法基线字段；前端收到校验错误时会清空本次结果和图形高亮。
 
 ## 本地开发
 

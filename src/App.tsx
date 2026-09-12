@@ -2,14 +2,18 @@ import { useMemo, useState } from 'react';
 import {
   analyzeReadings,
   serializeSamples,
-  wrapSample,
+  wrapCompensatedSample,
+  type CorrectedPoint,
   type FieldError,
   type ReadingInput,
   type SegmentResult,
 } from './api';
 import SamplingRing from './SamplingRing';
 
-const initialPayload = () => serializeSamples(wrapSample());
+const initialPayload = () => {
+  const { samples, baseline } = wrapCompensatedSample();
+  return serializeSamples(samples, baseline);
+};
 
 function segmentText(segment: SegmentResult): string {
   return segment.startAngle === segment.endAngle
@@ -20,7 +24,9 @@ function segmentText(segment: SegmentResult): string {
 export default function App() {
   const [payload, setPayload] = useState(initialPayload);
   const [segments, setSegments] = useState<SegmentResult[]>([]);
-  const [samples, setSamples] = useState<ReadingInput[]>(() => wrapSample());
+  const [samples, setSamples] = useState<ReadingInput[]>(() => wrapCompensatedSample().samples);
+  const [points, setPoints] = useState<CorrectedPoint[] | null>(null);
+  const [baselineApplied, setBaselineApplied] = useState(false);
   const [threshold, setThreshold] = useState<number | null>(2.5);
   const [errors, setErrors] = useState<FieldError[]>([]);
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
@@ -32,6 +38,8 @@ export default function App() {
   const clearResult = () => {
     setSegments([]);
     setSamples([]);
+    setPoints(null);
+    setBaselineApplied(false);
     setThreshold(null);
     setSelectedIndex(null);
     setErrors([]);
@@ -43,6 +51,8 @@ export default function App() {
     setErrors([]);
     setSegments([]);
     setSamples([]);
+    setPoints(null);
+    setBaselineApplied(false);
     setThreshold(null);
     setSelectedIndex(null);
     try {
@@ -50,6 +60,8 @@ export default function App() {
       const parsed = JSON.parse(payload) as { samples: ReadingInput[]; threshold: number };
       setSamples(parsed.samples);
       setSegments(result.segments);
+      setPoints(result.points ?? null);
+      setBaselineApplied(result.baselineApplied);
       setThreshold(result.threshold);
       setSubmitted(true);
       setSelectedIndex(result.segments.length === 0 ? null : 0);
@@ -66,9 +78,12 @@ export default function App() {
   };
 
   const loadWrapExample = () => {
-    setPayload(serializeSamples(wrapSample()));
+    const { samples, baseline } = wrapCompensatedSample();
+    setPayload(serializeSamples(samples, baseline));
     clearResult();
   };
+
+  const selectedSegment = selectedIndex === null ? null : segments[selectedIndex] ?? null;
 
   return (
     <main className="page-shell">
@@ -96,7 +111,7 @@ export default function App() {
               </button>
             </div>
             <label className="field-label" htmlFor="payload">
-              JSON 载荷（包含非负 threshold 与 360 条 samples）
+              JSON 载荷（包含非负 threshold、360 条 samples，可选 360 条 baseline 基线）
             </label>
             <textarea
               id="payload"
@@ -146,7 +161,7 @@ export default function App() {
                       <th>终点</th>
                       <th>跨度（采样点数）</th>
                       <th>峰值角</th>
-                      <th>峰值（mm）</th>
+                      <th>{baselineApplied ? '校正峰值（mm）' : '峰值（mm）'}</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -178,6 +193,14 @@ export default function App() {
                     ? `唯一区段为 ${segmentText(segments[0])}，未在零度拆成两段。`
                     : '点击任意结果行或环形弧，可突出该段对应的采样角点。'}
                 </p>
+                {selectedSegment && baselineApplied && (
+                  <p className="peak-detail" data-testid="peak-detail">
+                    选中区段峰值角 {selectedSegment.peakAngle}°：原幅值{' '}
+                    {(selectedSegment.peakRawAmplitude ?? 0).toFixed(3)} mm，基线{' '}
+                    {(selectedSegment.peakBaseline ?? 0).toFixed(3)} mm，校正幅值{' '}
+                    {selectedSegment.peakAmplitude.toFixed(3)} mm
+                  </p>
+                )}
               </div>
             )}
           </div>
@@ -190,6 +213,7 @@ export default function App() {
             selectedIndex={selectedIndex}
             onSelectSegment={setSelectedIndex}
             threshold={threshold}
+            points={points}
           />
           <div className="legend panel">
             <span><i className="legend-normal" />非缺陷采样</span>

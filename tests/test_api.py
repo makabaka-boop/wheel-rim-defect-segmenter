@@ -1,6 +1,7 @@
 import json
 import math
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
@@ -18,6 +19,31 @@ def valid_payload(**overrides):
             }
             for angle in range(360)
         ],
+    }
+    payload.update(overrides)
+    return payload
+
+
+def baseline_entry(angle: int) -> dict:
+    return {"angle": angle, "value": round(0.3 + (angle % 5) * 0.08, 2)}
+
+
+def compensated_payload(**overrides):
+    baseline = [baseline_entry(angle) for angle in range(360)]
+    values = {entry["angle"]: entry["value"] for entry in baseline}
+    payload = {
+        "threshold": 2.5,
+        "samples": [
+            {
+                "angle": angle,
+                "amplitude": round(
+                    values[angle] + (4.8 if angle >= 357 or angle <= 2 else 0.2),
+                    2,
+                ),
+            }
+            for angle in range(360)
+        ],
+        "baseline": baseline,
     }
     payload.update(overrides)
     return payload
@@ -124,3 +150,130 @@ def test_empty_body_is_localized_to_request():
     response = client.post("/api/readings/analyze", content=b"")
     assert response.status_code == 422
     assert response.json()["errors"][0]["field"] == "request"
+
+
+def test_payload_without_baseline_keeps_legacy_response_shape():
+    response = client.post("/api/readings/analyze", json=valid_payload())
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["baselineApplied"] is False
+    assert "points" not in data
+    segment = data["segments"][0]
+    assert segment["peakAmplitude"] == 4.8
+    assert "peakRawAmplitude" not in segment
+    assert "peakBaseline" not in segment
+
+
+def test_compensated_wrap_segment_is_recomputable_point_by_point():
+    payload = compensated_payload()
+    response = client.post("/api/readings/analyze", json=payload)
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["baselineApplied"] is True
+    assert data["sampleCount"] == 360
+
+    points = data["points"]
+    assert len(points) == 360
+    samples = {sample["angle"]: sample["amplitude"] for sample in payload["samples"]}
+    baselines = {entry["angle"]: entry["value"] for entry in payload["baseline"]}
+    corrected = {}
+    for point in points:
+        assert point["amplitude"] == samples[point["angle"]]
+        assert point["baseline"] == baselines[point["angle"]]
+        expected = max(0.0, samples[point["angle"]] - baselines[point["angle"]])
+        assert point["correctedAmplitude"] == pytest.approx(expected)
+        corrected[point["angle"]] = point["correctedAmplitude"]
+
+    # Recompute the defective run across zero from the per-point corrections.
+    defective = {angle for angle, value in corrected.items() if value >= data["threshold"]}
+    assert defective == {357, 358, 359, 0, 1, 2}
+
+    assert len(data["segments"]) == 1
+    segment = data["segments"][0]
+    assert segment["startAngle"] == 357
+    assert segment["endAngle"] == 2
+    assert segment["span"] == 6
+    assert segment["angles"] == [357, 358, 359, 0, 1, 2]
+
+    expected_peak = min(defective, key=lambda angle: (-corrected[angle], angle))
+    assert segment["peakAngle"] == expected_peak
+    assert segment["peakAmplitude"] == pytest.approx(corrected[expected_peak])
+    assert segment["peakRawAmplitude"] == pytest.approx(samples[expected_peak])
+    assert segment["peakBaseline"] == pytest.approx(baselines[expected_peak])
+
+
+def test_valid_baseline_suppresses_background_noise():
+    payload = compensated_payload()
+    for sample in payload["samples"]:
+        sample["amplitude"] = 3.0  # raw reading everywhere above threshold
+    for entry in payload["baseline"]:
+        entry["value"] = 1.0  # coupling floor pushes corrected values to 2.0
+
+    response = client.post("/api/readings/analyze", json=payload)
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["baselineApplied"] is True
+    assert data["segments"] == []
+    assert all(point["correctedAmplitude"] == 2.0 for point in data["points"])
+
+    legacy = client.post(
+        "/api/readings/analyze",
+        json={"threshold": payload["threshold"], "samples": payload["samples"]},
+    )
+    assert legacy.status_code == 200
+    assert legacy.json()["segments"][0]["span"] == 360
+
+
+def test_baseline_missing_duplicate_and_illegal_values_are_localized():
+    payload = compensated_payload()
+    baseline = payload["baseline"]
+    baseline.pop(9)  # now 359 entries
+    baseline[0]["angle"] = 1  # duplicates baseline[1]
+    baseline[2]["angle"] = 360
+    baseline[3]["value"] = -0.1
+    baseline[4]["value"] = math.nan
+
+    response = client.post(
+        "/api/readings/analyze",
+        content=json.dumps(payload, allow_nan=True),
+        headers={"Content-Type": "application/json"},
+    )
+
+    assert response.status_code == 422
+    fields = {error["field"] for error in response.json()["errors"]}
+    assert "baseline" in fields  # 359 records
+    assert "baseline[0].angle" in fields
+    assert "baseline[1].angle" in fields
+    assert "baseline[2].angle" in fields
+    assert "baseline[3].value" in fields
+    assert "baseline[4].value" in fields
+
+
+def test_baseline_missing_fields_and_wrong_types_are_localized():
+    payload = compensated_payload()
+    payload["baseline"][5] = {}
+    payload["baseline"][6]["angle"] = True
+    payload["baseline"][7]["value"] = "0.5"
+
+    response = client.post("/api/readings/analyze", json=payload)
+
+    assert response.status_code == 422
+    fields = {error["field"] for error in response.json()["errors"]}
+    assert "baseline[5].angle" in fields
+    assert "baseline[5].value" in fields
+    assert "baseline[6].angle" in fields
+    assert "baseline[7].value" in fields
+
+
+def test_baseline_must_be_an_array():
+    response = client.post(
+        "/api/readings/analyze",
+        json=compensated_payload(baseline={"angle": 0, "value": 0.3}),
+    )
+
+    assert response.status_code == 422
+    fields = {error["field"] for error in response.json()["errors"]}
+    assert "baseline" in fields

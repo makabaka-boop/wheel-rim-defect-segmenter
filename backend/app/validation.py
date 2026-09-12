@@ -11,6 +11,7 @@ from .core import Reading
 class ValidatedPayload:
     threshold: float
     readings: list[Reading]
+    baseline_applied: bool = False
 
 
 def field_error(field: str, message: str) -> dict[str, str]:
@@ -98,14 +99,89 @@ def validate_payload(
                         )
                     )
 
+    baseline_by_angle: dict[int, float] | None = None
+    if "baseline" in raw:
+        baseline_by_angle = {}
+        baseline = raw["baseline"]
+        if not isinstance(baseline, list):
+            errors.append(field_error("baseline", "baseline 必须是数组"))
+            baseline = []
+        elif len(baseline) != 360:
+            errors.append(
+                field_error(
+                    "baseline",
+                    f"baseline 必须恰好包含 360 条，当前为 {len(baseline)} 条",
+                )
+            )
+
+        baseline_positions: dict[int, list[int]] = {}
+        for index, item in enumerate(baseline):
+            base_path = f"baseline[{index}]"
+            if not isinstance(item, Mapping):
+                errors.append(field_error(base_path, "该基线必须是 JSON 对象"))
+                continue
+
+            if "angle" not in item:
+                errors.append(field_error(f"{base_path}.angle", "缺少 angle 字段"))
+            else:
+                angle = item["angle"]
+                if not isinstance(angle, int) or isinstance(angle, bool):
+                    errors.append(field_error(f"{base_path}.angle", "angle 必须是整数"))
+                elif not 0 <= angle <= 359:
+                    errors.append(
+                        field_error(f"{base_path}.angle", "angle 必须在 0 至 359 之间")
+                    )
+                else:
+                    baseline_positions.setdefault(angle, []).append(index)
+
+            if "value" not in item:
+                errors.append(field_error(f"{base_path}.value", "缺少 value 字段"))
+            else:
+                value = item["value"]
+                if not is_finite_number(value):
+                    errors.append(
+                        field_error(f"{base_path}.value", "value 必须是有限数字（毫米）")
+                    )
+                elif value < 0:
+                    errors.append(field_error(f"{base_path}.value", "value 必须是非负数"))
+
+        if isinstance(raw["baseline"], list):
+            for positions in sorted(baseline_positions.values(), key=lambda value: value[0]):
+                if len(positions) > 1:
+                    for position in positions:
+                        angle = baseline[position]["angle"]
+                        errors.append(
+                            field_error(
+                                f"baseline[{position}].angle",
+                                f"角度 {angle} 重复，0 至 359 每个角度只能出现一次",
+                            )
+                        )
+
+        if not errors:
+            baseline_by_angle = {
+                int(item["angle"]): float(item["value"]) for item in baseline
+            }
+
     if errors:
         return None, errors
 
     readings = sorted(
         (
-            Reading(angle=int(item["angle"]), amplitude=float(item["amplitude"]))
+            Reading(
+                angle=int(item["angle"]),
+                amplitude=float(item["amplitude"]),
+                baseline=(
+                    baseline_by_angle[int(item["angle"])]
+                    if baseline_by_angle is not None
+                    else None
+                ),
+            )
             for item in samples
         ),
         key=lambda reading: reading.angle,
     )
-    return ValidatedPayload(threshold=float(raw["threshold"]), readings=readings), []
+    return ValidatedPayload(
+        threshold=float(raw["threshold"]),
+        readings=readings,
+        baseline_applied=baseline_by_angle is not None,
+    ), []

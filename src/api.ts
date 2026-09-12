@@ -3,6 +3,11 @@ export interface ReadingInput {
   amplitude: number;
 }
 
+export interface BaselineInput {
+  angle: number;
+  value: number;
+}
+
 export interface SegmentResult {
   startAngle: number;
   endAngle: number;
@@ -10,12 +15,23 @@ export interface SegmentResult {
   peakAngle: number;
   peakAmplitude: number;
   angles: number[];
+  peakRawAmplitude?: number;
+  peakBaseline?: number;
+}
+
+export interface CorrectedPoint {
+  angle: number;
+  amplitude: number;
+  baseline: number;
+  correctedAmplitude: number;
 }
 
 export interface AnalysisResponse {
   threshold: number;
   sampleCount: number;
+  baselineApplied: boolean;
   segments: SegmentResult[];
+  points?: CorrectedPoint[];
 }
 
 export interface FieldError {
@@ -35,11 +51,38 @@ export const wrapSample = (): ReadingInput[] => {
   return samples;
 };
 
-export const serializeSamples = (samples: ReadingInput[]): string =>
+export const wrapBaseline = (): BaselineInput[] => {
+  const baseline: BaselineInput[] = [];
+  for (let angle = 0; angle < 360; angle += 1) {
+    baseline.push({ angle, value: Number((0.3 + (angle % 5) * 0.08).toFixed(2)) });
+  }
+  return baseline;
+};
+
+export const wrapCompensatedSample = (): {
+  samples: ReadingInput[];
+  baseline: BaselineInput[];
+} => {
+  const baseline = wrapBaseline();
+  const samples = baseline.map(({ angle, value }) => {
+    const defective = angle >= 357 || angle <= 2;
+    return {
+      angle,
+      amplitude: Number((value + (defective ? 4.8 : 0.12 + (angle % 3) * 0.05)).toFixed(2)),
+    };
+  });
+  return { samples, baseline };
+};
+
+export const serializeSamples = (
+  samples: ReadingInput[],
+  baseline?: BaselineInput[],
+): string =>
   JSON.stringify(
     {
       threshold: 2.5,
       samples,
+      ...(baseline ? { baseline } : {}),
     },
     null,
     2,

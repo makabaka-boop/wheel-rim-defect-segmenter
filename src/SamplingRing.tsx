@@ -1,4 +1,4 @@
-import type { ReadingInput, SegmentResult } from './api';
+import type { CorrectedPoint, ReadingInput, SegmentResult } from './api';
 
 interface SamplingRingProps {
   samples: ReadingInput[];
@@ -6,6 +6,7 @@ interface SamplingRingProps {
   selectedIndex: number | null;
   onSelectSegment: (index: number) => void;
   threshold: number | null;
+  points?: CorrectedPoint[] | null;
 }
 
 const size = 640;
@@ -53,12 +54,28 @@ export default function SamplingRing({
   selectedIndex,
   onSelectSegment,
   threshold,
+  points = null,
 }: SamplingRingProps) {
   const byAngle = new Map(samples.map((sample) => [sample.angle, sample.amplitude]));
+  const pointByAngle = new Map((points ?? []).map((point) => [point.angle, point]));
   const defectiveAngles = new Set(segments.flatMap((segment) => segment.angles));
   const selected = selectedIndex === null ? null : segments[selectedIndex] ?? null;
   const selectedAngles = selected ? angleSet(selected) : new Set<number>();
   const ticks = Array.from({ length: 36 }, (_, index) => index * 10);
+
+  const sampleTitle = (angle: number, defective: boolean): string => {
+    const point = pointByAngle.get(angle);
+    const status = defective ? '，缺陷' : '';
+    if (point) {
+      return (
+        `角度 ${angle}°，原幅值 ${point.amplitude.toFixed(3)} mm，` +
+        `基线 ${point.baseline.toFixed(3)} mm，` +
+        `校正幅值 ${point.correctedAmplitude.toFixed(3)} mm${status}`
+      );
+    }
+    const amplitude = byAngle.get(angle) ?? 0;
+    return `角度 ${angle}°，幅值 ${amplitude.toFixed(3)} mm${status}`;
+  };
 
   return (
     <div className="ring-card" aria-label="360 度采样环">
@@ -88,7 +105,6 @@ export default function SamplingRing({
         })}
 
         {Array.from({ length: 360 }, (_, angle) => {
-          const amplitude = byAngle.get(angle) ?? 0;
           const point = pointPosition(angle, ringRadius);
           const inSelected = selectedAngles.has(angle);
           const defective = defectiveAngles.has(angle);
@@ -104,9 +120,7 @@ export default function SamplingRing({
                 inSelected ? 'sample-dot--selected' : '',
               ].join(' ')}
             >
-              <title>
-                {`角度 ${angle}°，幅值 ${amplitude.toFixed(3)} mm${defective ? '，缺陷' : ''}`}
-              </title>
+              <title>{sampleTitle(angle, defective)}</title>
             </circle>
           );
         })}
@@ -146,7 +160,7 @@ export default function SamplingRing({
                   y2={peak.y}
                 />
                 <text x={peak.x} y={peak.y} textAnchor="middle" dominantBaseline="middle">
-                  {`峰值 ${selected.peakAmplitude.toFixed(3)}@${selected.peakAngle}°`}
+                  {`${points ? '校正峰值' : '峰值'} ${selected.peakAmplitude.toFixed(3)}@${selected.peakAngle}°`}
                 </text>
               </g>
             );

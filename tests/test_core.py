@@ -2,12 +2,35 @@ import math
 
 import pytest
 
-from app.core import Reading, find_segments
+from app.core import Reading, corrected_amplitude, find_segments
 
 
 def make_readings(values: dict[int, float] | None = None, default: float = 0.0) -> list[Reading]:
     values = values or {}
     return [Reading(angle=angle, amplitude=float(values.get(angle, default))) for angle in range(360)]
+
+
+def make_baselines(values: dict[int, float] | None = None, default: float = 0.0) -> dict[int, float]:
+    values = values or {}
+    return {angle: float(values.get(angle, default)) for angle in range(360)}
+
+
+def make_compensated_readings(
+    values: dict[int, float] | None = None,
+    baselines: dict[int, float] | None = None,
+    default: float = 0.0,
+    default_baseline: float = 0.0,
+) -> list[Reading]:
+    values = values or {}
+    baselines = baselines or {}
+    return [
+        Reading(
+            angle=angle,
+            amplitude=float(values.get(angle, default)),
+            baseline=float(baselines.get(angle, default_baseline)),
+        )
+        for angle in range(360)
+    ]
 
 
 def test_threshold_is_inclusive_at_fixed_zero_boundary():
@@ -140,3 +163,84 @@ def test_core_rejects_missing_duplicate_out_of_range_and_illegal_amplitude():
 
     with pytest.raises(ValueError, match="non-negative"):
         find_segments(make_readings(), -1.0)
+
+
+def test_corrected_amplitude_clamps_at_zero_and_passes_through_without_baseline():
+    assert corrected_amplitude(4.8, None) == 4.8
+    assert corrected_amplitude(4.8, 1.2) == pytest.approx(3.6)
+    assert corrected_amplitude(0.5, 1.2) == 0.0
+    assert corrected_amplitude(1.2, 1.2) == 0.0
+
+
+def test_baseline_suppresses_background_noise_below_threshold():
+    readings = make_compensated_readings(
+        default=2.9,
+        baselines=make_baselines(default=1.0),
+    )
+
+    assert find_segments(readings, 2.5) == []
+    assert len(find_segments(make_readings(default=2.9), 2.5)) == 1
+
+
+def test_baseline_wrap_segment_uses_corrected_amplitudes_and_keeps_raw_peak():
+    baselines = make_baselines({angle: 1.0 for angle in (358, 359, 0, 1)})
+    readings = make_compensated_readings(
+        {358: 4.1, 359: 5.9, 0: 6.6, 1: 4.4},
+        baselines=baselines,
+    )
+
+    segments = find_segments(readings, 2.5)
+
+    assert len(segments) == 1
+    segment = segments[0]
+    assert segment.start_angle == 358
+    assert segment.end_angle == 1
+    assert segment.span == 4
+    assert segment.angles == (358, 359, 0, 1)
+    assert segment.peak_angle == 0
+    assert segment.peak_amplitude == pytest.approx(5.6)
+    assert segment.peak_raw_amplitude == pytest.approx(6.6)
+    assert segment.peak_baseline == pytest.approx(1.0)
+
+
+def test_peak_is_selected_by_corrected_not_raw_amplitude():
+    readings = make_compensated_readings(
+        {10: 9.0, 11: 5.0},
+        baselines=make_baselines({10: 7.0, 11: 1.0}),
+    )
+
+    segment = find_segments(readings, 2.0)[0]
+
+    assert segment.peak_angle == 11
+    assert segment.peak_amplitude == pytest.approx(4.0)
+    assert segment.peak_raw_amplitude == pytest.approx(5.0)
+    assert segment.peak_baseline == pytest.approx(1.0)
+
+
+def test_baseline_equal_to_amplitude_drops_point_out_of_segment():
+    readings = make_compensated_readings(
+        {10: 3.0, 11: 3.0, 12: 3.0},
+        baselines=make_baselines({11: 3.0}),
+    )
+
+    segments = find_segments(readings, 2.5)
+
+    assert [(segment.start_angle, segment.end_angle, segment.span) for segment in segments] == [
+        (10, 10, 1),
+        (12, 12, 1),
+    ]
+
+
+def test_readings_without_baseline_report_no_peak_extras():
+    segment = find_segments(make_readings({0: 3.0}), 2.0)[0]
+
+    assert segment.peak_raw_amplitude is None
+    assert segment.peak_baseline is None
+
+
+def test_core_rejects_illegal_baseline():
+    with pytest.raises(ValueError, match="baseline"):
+        find_segments(make_compensated_readings(baselines=make_baselines({0: -0.5})), 1.0)
+
+    with pytest.raises(ValueError, match="baseline"):
+        find_segments(make_compensated_readings(baselines=make_baselines({0: math.nan})), 1.0)

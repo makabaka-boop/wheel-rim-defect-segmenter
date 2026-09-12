@@ -181,6 +181,16 @@ tbody tr { cursor: pointer; outline: none; }
 tbody tr:hover, tbody tr:focus, .selected-row { background: #eff6ff; }
 .selected-row td:first-child { color: #1d4ed8; font-weight: 800; }
 .table-note { margin: 13px 0 0; color: #475569; font-size: 0.88rem; }
+.peak-detail {
+  margin: 10px 0 0;
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: #eff6ff;
+  color: #1e3a8a;
+  font-size: 0.9rem;
+  font-weight: 650;
+  line-height: 1.6;
+}
 
 .ring-card { padding: 12px; }
 svg { width: 100%; display: block; }
