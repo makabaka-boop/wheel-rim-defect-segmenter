@@ -24,18 +24,19 @@ const pointPosition = (angle: number, radius = ringRadius) => {
   };
 };
 
+const segmentArcRadius = ringRadius - 31;
+
 const describeArc = (startAngle: number, span: number, radius: number): string => {
   if (span >= 360) {
+    // Exactly one turn around the circle: a 180° arc from 0° to 180° followed
+    // by the other 180° arc back to 0°. Using four >180° arcs would accumulate
+    // more than 360° of sweep and draw the full-circle segment several times.
     const start = pointPosition(0, radius);
-    const mid1 = pointPosition(89, radius);
-    const mid2 = pointPosition(179, radius);
-    const mid3 = pointPosition(269, radius);
+    const opposite = pointPosition(180, radius);
     return [
       `M ${start.x} ${start.y}`,
-      `A ${radius} ${radius} 0 1 1 ${mid1.x} ${mid1.y}`,
-      `A ${radius} ${radius} 0 1 1 ${mid2.x} ${mid2.y}`,
-      `A ${radius} ${radius} 0 1 1 ${mid3.x} ${mid3.y}`,
-      `A ${radius} ${radius} 0 1 1 ${start.x} ${start.y}`,
+      `A ${radius} ${radius} 0 0 1 ${opposite.x} ${opposite.y}`,
+      `A ${radius} ${radius} 0 0 1 ${start.x} ${start.y}`,
     ].join(' ');
   }
 
@@ -125,18 +126,42 @@ export default function SamplingRing({
           );
         })}
 
-        {segments.map((segment, index) => (
-          <path
-            key={`${segment.startAngle}-${segment.span}-${index}`}
-            d={describeArc(segment.startAngle, segment.span, ringRadius - 31)}
-            className={index === selectedIndex ? 'segment-arc segment-arc--selected' : 'segment-arc'}
-            onClick={() => onSelectSegment(index)}
-          >
+        {segments.map((segment, index) => {
+          const selectedClass = index === selectedIndex ? 'segment-arc segment-arc--selected' : 'segment-arc';
+          const title = (
             <title>
               {`区段 ${index + 1}：${segment.startAngle}° 至 ${segment.endAngle}°，跨度 ${segment.span} 点`}
             </title>
-          </path>
-        ))}
+          );
+          if (segment.span === 1) {
+            // A one-point segment collapses the arc path into its start point
+            // (zero-length SVG paths are not clickable), so draw a round
+            // marker on the arc radius that stays selectable like any arc.
+            const marker = pointPosition(segment.startAngle, segmentArcRadius);
+            return (
+              <circle
+                key={`${segment.startAngle}-${segment.span}-${index}`}
+                cx={marker.x}
+                cy={marker.y}
+                r="9"
+                className={`${selectedClass} segment-arc--point`}
+                onClick={() => onSelectSegment(index)}
+              >
+                {title}
+              </circle>
+            );
+          }
+          return (
+            <path
+              key={`${segment.startAngle}-${segment.span}-${index}`}
+              d={describeArc(segment.startAngle, segment.span, segmentArcRadius)}
+              className={selectedClass}
+              onClick={() => onSelectSegment(index)}
+            >
+              {title}
+            </path>
+          );
+        })}
 
         {selected &&
           selected.angles.map((angle) => {

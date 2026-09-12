@@ -208,6 +208,8 @@ svg { width: 100%; display: block; }
   cursor: pointer;
 }
 .segment-arc--selected { stroke: #eab308; stroke-width: 19; }
+.segment-arc--point { fill: rgba(249, 115, 22, 0.28); }
+.segment-arc--selected.segment-arc--point { fill: #eab308; }
 .selected-halo { fill: rgba(250, 204, 21, 0.22); stroke: #ca8a04; stroke-width: 2; }
 .peak-label line { stroke: #ca8a04; stroke-width: 1.5; }
 .peak-label text { fill: #854d0e; font-size: 17px; font-weight: 800; }

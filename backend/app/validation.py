@@ -19,11 +19,18 @@ def field_error(field: str, message: str) -> dict[str, str]:
 
 
 def is_finite_number(value: object) -> bool:
-    return (
-        isinstance(value, (int, float))
-        and not isinstance(value, bool)
-        and math.isfinite(value)
-    )
+    # Integers larger than the float range (e.g. 10**400) make
+    # math.isfinite raise OverflowError; treat them as invalid so validation
+    # keeps running and reports the offending field instead of crashing the
+    # request with a 500.
+    try:
+        return (
+            isinstance(value, (int, float))
+            and not isinstance(value, bool)
+            and math.isfinite(value)
+        )
+    except OverflowError:
+        return False
 
 
 def validate_payload(

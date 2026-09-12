@@ -268,6 +268,66 @@ def test_baseline_missing_fields_and_wrong_types_are_localized():
     assert "baseline[7].value" in fields
 
 
+def test_compensated_threshold_exact_point_detects_single_point_segment():
+    payload = compensated_payload()
+    # Flatten every reading to raw 0.3 with baseline 0.1 except one angle; the
+    # corrected 0.2 equals the threshold and must form a single-point segment.
+    payload["threshold"] = 0.2
+    for angle, sample in enumerate(payload["samples"]):
+        sample["amplitude"] = 0.3 if angle == 0 else 0.0
+    for entry in payload["baseline"]:
+        entry["value"] = 0.1 if entry["angle"] == 0 else 0.0
+
+    response = client.post("/api/readings/analyze", json=payload)
+
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data["segments"]) == 1
+    segment = data["segments"][0]
+    assert segment["startAngle"] == 0
+    assert segment["endAngle"] == 0
+    assert segment["span"] == 1
+    assert segment["angles"] == [0]
+    assert segment["peakAmplitude"] == pytest.approx(0.2)
+    assert segment["peakRawAmplitude"] == pytest.approx(0.3)
+    assert segment["peakBaseline"] == pytest.approx(0.1)
+    point = data["points"][0]
+    assert point["correctedAmplitude"] == pytest.approx(0.2)
+
+
+def test_huge_integer_baseline_value_is_localized_not_crashing():
+    payload = compensated_payload()
+    payload["baseline"][7]["value"] = 10**400
+
+    response = client.post(
+        "/api/readings/analyze",
+        content=json.dumps(payload),
+        headers={"Content-Type": "application/json"},
+    )
+
+    assert response.status_code == 422
+    errors = response.json()["errors"]
+    fields = {error["field"] for error in errors}
+    assert "baseline[7].value" in fields
+
+
+def test_huge_integer_amplitude_and_threshold_are_localized():
+    payload = valid_payload()
+    payload["threshold"] = 10**400
+    payload["samples"][3]["amplitude"] = 10**400
+
+    response = client.post(
+        "/api/readings/analyze",
+        content=json.dumps(payload),
+        headers={"Content-Type": "application/json"},
+    )
+
+    assert response.status_code == 422
+    fields = {error["field"] for error in response.json()["errors"]}
+    assert "threshold" in fields
+    assert "samples[3].amplitude" in fields
+
+
 def test_baseline_must_be_an_array():
     response = client.post(
         "/api/readings/analyze",

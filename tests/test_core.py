@@ -238,6 +238,30 @@ def test_readings_without_baseline_report_no_peak_extras():
     assert segment.peak_baseline is None
 
 
+def test_corrected_amplitude_threshold_exact_boundary_survives_float_residue():
+    # 0.3 - 0.1 is 0.19999999999999998 in binary floats; the threshold-exact
+    # critical point must still count as a single-point defective segment.
+    readings = [
+        Reading(angle=0, amplitude=0.3, baseline=0.1),
+        *[
+            Reading(angle=angle, amplitude=0.0, baseline=0.0)
+            for angle in range(1, 360)
+        ],
+    ]
+
+    segments = find_segments(readings, 0.2)
+
+    assert len(segments) == 1
+    segment = segments[0]
+    assert segment.start_angle == 0
+    assert segment.end_angle == 0
+    assert segment.span == 1
+    assert segment.peak_angle == 0
+    assert segment.peak_amplitude == pytest.approx(0.2)
+    assert segment.peak_raw_amplitude == pytest.approx(0.3)
+    assert segment.peak_baseline == pytest.approx(0.1)
+
+
 def test_core_rejects_illegal_baseline():
     with pytest.raises(ValueError, match="baseline"):
         find_segments(make_compensated_readings(baselines=make_baselines({0: -0.5})), 1.0)

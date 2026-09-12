@@ -1,3 +1,4 @@
+import json
 import os
 
 import httpx
@@ -142,6 +143,41 @@ def test_live_valid_baseline_suppresses_background_noise():
     data = response.json()
     assert data["segments"] == []
     assert all(point["correctedAmplitude"] == 2.0 for point in data["points"])
+
+
+def test_live_compensated_threshold_exact_point_is_single_segment():
+    request = compensated_payload()
+    request["threshold"] = 0.2
+    for angle, sample in enumerate(request["samples"]):
+        sample["amplitude"] = 0.3 if angle == 0 else 0.0
+    for entry in request["baseline"]:
+        entry["value"] = 0.1 if entry["angle"] == 0 else 0.0
+
+    response = httpx.post(f"{API_URL}/api/readings/analyze", json=request, timeout=10)
+
+    assert response.status_code == 200
+    segment = response.json()["segments"]
+    assert len(segment) == 1
+    assert segment[0]["startAngle"] == 0
+    assert segment[0]["endAngle"] == 0
+    assert segment[0]["span"] == 1
+    assert segment[0]["peakAmplitude"] == pytest.approx(0.2)
+
+
+def test_live_huge_integer_baseline_value_returns_field_error():
+    bad = compensated_payload()
+    bad["baseline"][7]["value"] = 10**400
+
+    response = httpx.post(
+        f"{API_URL}/api/readings/analyze",
+        content=json.dumps(bad),
+        headers={"Content-Type": "application/json"},
+        timeout=10,
+    )
+
+    assert response.status_code == 422
+    fields = {error["field"] for error in response.json()["errors"]}
+    assert "baseline[7].value" in fields
 
 
 def test_live_illegal_baseline_returns_field_feedback():

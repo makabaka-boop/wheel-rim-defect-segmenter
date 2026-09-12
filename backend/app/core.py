@@ -50,7 +50,11 @@ def corrected_amplitude(amplitude: float, baseline: float | None) -> float:
 
     if baseline is None:
         return amplitude
-    return max(0.0, amplitude - baseline)
+    # Decimal inputs such as 0.3 - 0.1 carry binary-float residue
+    # (0.19999999999999998), which would wrongly push a threshold-exact point
+    # just below the boundary. Round the residual away before clamping so a
+    # corrected value mathematically equal to the threshold stays inclusive.
+    return max(0.0, round(amplitude - baseline, 9))
 
 
 def _validate_readings(readings: Sequence[Reading], threshold: float) -> list[float]:
