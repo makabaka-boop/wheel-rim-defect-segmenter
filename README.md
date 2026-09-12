@@ -143,6 +143,8 @@ npm run dev
 
 Vite 将 `/api` 代理到 `http://localhost:8000`；也可用 `VITE_API_PROXY_TARGET` 覆盖。
 
+Vite 默认只放行 localhost 的 Host 头。Compose 网络内通过服务名访问（`http://web:5173`）时，`vite.config.ts` 已在 `server.allowedHosts` 中放行 `web`；其他主机名可用逗号分隔的 `VITE_ALLOWED_HOSTS` 追加，否则 Vite 会返回 403。
+
 运行测试：
 
 ```bash
