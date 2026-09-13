@@ -397,3 +397,161 @@ def test_baseline_must_be_an_array():
     assert response.status_code == 422
     fields = {error["field"] for error in response.json()["errors"]}
     assert "baseline" in fields
+
+
+def test_angle_offset_turns_wrap_defect_into_ordinary_segment_and_maps_peak():
+    # A six-point run straddling zero at source 357..2 moves by +5 into the
+    # fully interior run 2..7, so the zero crossing disappears without
+    # changing span or amplitudes.
+    wrap_payload = {
+        "threshold": 2.5,
+        "samples": [
+            {"angle": angle, "amplitude": 4.8 if 357 <= angle <= 359 or angle <= 2 else 0.4}
+            for angle in range(360)
+        ],
+        "angleOffset": 5,
+    }
+    response = client.post("/api/readings/analyze", json=wrap_payload)
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["angleOffset"] == 5
+    assert len(data["segments"]) == 1
+    segment = data["segments"][0]
+    assert segment["startAngle"] == 2
+    assert segment["endAngle"] == 7
+    assert segment["span"] == 6
+    assert segment["angles"] == [2, 3, 4, 5, 6, 7]
+    assert segment["startAngle"] <= segment["endAngle"]  # no longer wraps zero
+    # Equal peak amplitudes tie on the smallest displayed angle (2), which maps
+    # back to source 357.
+    assert segment["peakAngle"] == 2
+    assert segment["sourcePeakAngle"] == 357
+    assert segment["sourceStartAngle"] == 357
+    assert segment["sourceEndAngle"] == 2
+    assert segment["sourceAngles"] == [357, 358, 359, 0, 1, 2]
+
+
+def test_negative_angle_offset_keeps_a_wrapping_run_and_maps_back_to_source():
+    # Source run 359,0,1 shifted by -1 becomes 358,359,0: it still crosses
+    # zero, with boundaries mapped back to encoder coordinates.
+    wrap_payload = {
+        "threshold": 2.5,
+        "samples": [
+            {"angle": angle, "amplitude": 4.8 if angle == 359 or angle <= 1 else 0.4}
+            for angle in range(360)
+        ],
+        "angleOffset": -1,
+    }
+    response = client.post("/api/readings/analyze", json=wrap_payload)
+
+    assert response.status_code == 200
+    segment = response.json()["segments"][0]
+    assert segment["startAngle"] == 358
+    assert segment["endAngle"] == 0
+    assert segment["span"] == 3
+    assert segment["angles"] == [358, 359, 0]
+    assert segment["sourceStartAngle"] == 359
+    assert segment["sourceEndAngle"] == 1
+    assert segment["sourceAngles"] == [359, 0, 1]
+
+
+def test_angle_offset_matches_baseline_by_source_angle_before_rotation():
+    # Raw defect exists only at source 0; the large baseline sits at source 5.
+    # Pairing on source angles leaves the defect uncompensated at display 5; a
+    # display-first (wrong) order would subtract the source-5 baseline from it.
+    samples = [
+        {"angle": angle, "amplitude": 3.0 if angle == 0 else 0.0}
+        for angle in range(360)
+    ]
+    baseline = [
+        {"angle": angle, "value": 1.0 if angle == 5 else 0.0}
+        for angle in range(360)
+    ]
+    payload = {
+        "threshold": 2.5,
+        "samples": samples,
+        "baseline": baseline,
+        "angleOffset": 5,
+    }
+
+    response = client.post("/api/readings/analyze", json=payload)
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["angleOffset"] == 5
+    segment = data["segments"][0]
+    assert segment["peakAngle"] == 5
+    assert segment["sourcePeakAngle"] == 0
+    assert segment["peakAmplitude"] == pytest.approx(3.0)
+    assert segment["peakBaseline"] == pytest.approx(0.0)
+
+    by_display = {point["angle"]: point for point in data["points"]}
+    peak_point = by_display[5]
+    assert peak_point["sourceAngle"] == 0
+    assert peak_point["baseline"] == 0.0
+    assert peak_point["correctedAmplitude"] == pytest.approx(3.0)
+    rotated_baseline_point = by_display[10]
+    assert rotated_baseline_point["sourceAngle"] == 5
+    assert rotated_baseline_point["baseline"] == 1.0
+
+
+def test_compensated_wrap_sample_with_offset_keeps_pointwise_recomputability():
+    payload = compensated_payload()
+    payload["angleOffset"] = 5
+    response = client.post("/api/readings/analyze", json=payload)
+
+    assert response.status_code == 200
+    data = response.json()
+    samples = {sample["angle"]: sample["amplitude"] for sample in payload["samples"]}
+    baselines = {entry["angle"]: entry["value"] for entry in payload["baseline"]}
+
+    for point in data["points"]:
+        source = point["sourceAngle"]
+        assert point["angle"] == (source + 5) % 360
+        assert point["amplitude"] == samples[source]
+        assert point["baseline"] == baselines[source]
+        expected = max(0.0, samples[source] - baselines[source])
+        assert point["correctedAmplitude"] == pytest.approx(expected)
+
+    segment = data["segments"][0]
+    assert (segment["startAngle"], segment["endAngle"], segment["span"]) == (2, 7, 6)
+    # All six corrected values equal 4.8, so the tie resolves on the smallest
+    # displayed angle (2), whose source angle is 357 — proving ties follow
+    # display space while the source mapping stays traceable.
+    assert segment["peakAngle"] == 2
+    assert segment["sourcePeakAngle"] == 357
+    assert segment["peakAmplitude"] == pytest.approx(4.8)
+    assert segment["peakRawAmplitude"] == pytest.approx(samples[357])
+    assert segment["peakBaseline"] == pytest.approx(baselines[357])
+
+
+def test_illegal_angle_offset_is_localized_to_the_field():
+    cases = [
+        (1.5, "整数"),
+        (360, "359"),
+        (-360, "359"),
+        ("3", "整数"),
+        (True, "整数"),
+    ]
+    for offset, expected_message in cases:
+        response = client.post(
+            "/api/readings/analyze",
+            json=valid_payload(angleOffset=offset),
+        )
+        assert response.status_code == 422, offset
+        errors = response.json()["errors"]
+        assert [error["field"] for error in errors] == ["angleOffset"]
+        assert expected_message in errors[0]["message"]
+
+
+def test_explicit_zero_and_omitted_angle_offset_keep_legacy_shape():
+    for body in (valid_payload(), valid_payload(angleOffset=0)):
+        response = client.post("/api/readings/analyze", json=body)
+        assert response.status_code == 200
+        data = response.json()
+        assert "angleOffset" not in data
+        segment = data["segments"][0]
+        assert "sourcePeakAngle" not in segment
+        assert "sourceAngles" not in segment
+

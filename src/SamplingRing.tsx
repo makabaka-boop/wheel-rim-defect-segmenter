@@ -7,6 +7,9 @@ interface SamplingRingProps {
   onSelectSegment: (index: number) => void;
   threshold: number | null;
   points?: CorrectedPoint[] | null;
+  // Non-zero when every displayed angle is rotated by the field zero offset;
+  // tooltips then expose the source (encoder) angle alongside it.
+  angleOffset?: number;
 }
 
 const size = 640;
@@ -56,6 +59,7 @@ export default function SamplingRing({
   onSelectSegment,
   threshold,
   points = null,
+  angleOffset = 0,
 }: SamplingRingProps) {
   const byAngle = new Map(samples.map((sample) => [sample.angle, sample.amplitude]));
   const pointByAngle = new Map((points ?? []).map((point) => [point.angle, point]));
@@ -64,18 +68,21 @@ export default function SamplingRing({
   const selectedAngles = selected ? angleSet(selected) : new Set<number>();
   const ticks = Array.from({ length: 36 }, (_, index) => index * 10);
 
+  const sourceSuffix = (sourceAngle: number | undefined): string =>
+    angleOffset !== 0 && sourceAngle !== undefined ? `（原始来源角 ${sourceAngle}°）` : '';
+
   const sampleTitle = (angle: number, defective: boolean): string => {
     const point = pointByAngle.get(angle);
-    const status = defective ? '，缺陷' : '';
+    const status = `${defective ? '，缺陷' : ''}${sourceSuffix(point?.sourceAngle)}`;
     if (point) {
       return (
-        `角度 ${angle}°，原幅值 ${point.amplitude.toFixed(3)} mm，` +
+        `展示角 ${angle}°，原幅值 ${point.amplitude.toFixed(3)} mm，` +
         `基线 ${point.baseline.toFixed(3)} mm，` +
         `校正幅值 ${point.correctedAmplitude.toFixed(3)} mm${status}`
       );
     }
     const amplitude = byAngle.get(angle) ?? 0;
-    return `角度 ${angle}°，幅值 ${amplitude.toFixed(3)} mm${status}`;
+    return `展示角 ${angle}°，幅值 ${amplitude.toFixed(3)} mm${status}`;
   };
 
   return (
@@ -130,7 +137,9 @@ export default function SamplingRing({
           const selectedClass = index === selectedIndex ? 'segment-arc segment-arc--selected' : 'segment-arc';
           const title = (
             <title>
-              {`区段 ${index + 1}：${segment.startAngle}° 至 ${segment.endAngle}°，跨度 ${segment.span} 点`}
+              {`区段 ${index + 1}：展示角 ${segment.startAngle}° 至 ${segment.endAngle}°，跨度 ${segment.span} 点`}
+              {segment.sourceStartAngle !== undefined &&
+                `（原始来源角 ${segment.sourceStartAngle}° 至 ${segment.sourceEndAngle}°）`}
             </title>
           );
           if (segment.span === 1) {
@@ -164,11 +173,15 @@ export default function SamplingRing({
         })}
 
         {selected &&
-          selected.angles.map((angle) => {
+          selected.angles.map((angle, position) => {
             const point = pointPosition(angle, ringRadius);
+            const sourceAngle = selected.sourceAngles?.[position];
             return (
               <circle key={`selected-${angle}`} cx={point.x} cy={point.y} r="7" className="selected-halo">
-                <title>{`已选区段包含角度 ${angle}°`}</title>
+                <title>
+                  {`已选区段包含展示角 ${angle}°`}
+                  {sourceAngle !== undefined ? `（原始来源角 ${sourceAngle}°）` : ''}
+                </title>
               </circle>
             );
           })}
@@ -186,6 +199,9 @@ export default function SamplingRing({
                 />
                 <text x={peak.x} y={peak.y} textAnchor="middle" dominantBaseline="middle">
                   {`${points ? '校正峰值' : '峰值'} ${selected.peakAmplitude.toFixed(3)}@${selected.peakAngle}°`}
+                  {selected.sourcePeakAngle !== undefined
+                    ? `（来源 ${selected.sourcePeakAngle}°）`
+                    : ''}
                 </text>
               </g>
             );
@@ -195,7 +211,9 @@ export default function SamplingRing({
           {segments.length} 个连续区段
         </text>
         <text x={center} y={center + 18} textAnchor="middle" className="center-value">
-          {threshold === null ? '等待阈值' : `阈值 ${threshold} mm`}
+          {threshold === null
+            ? '等待阈值'
+            : `阈值 ${threshold} mm${angleOffset !== 0 ? ` · 偏移 ${angleOffset > 0 ? `+${angleOffset}` : angleOffset}°` : ''}`}
         </text>
       </svg>
     </div>

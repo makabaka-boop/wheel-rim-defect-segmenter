@@ -130,6 +130,96 @@ def test_live_payload_without_baseline_keeps_legacy_response():
     assert "peakBaseline" not in segment
 
 
+def test_live_angle_offset_turns_wrap_defect_into_ordinary_segment():
+    request = payload()
+    request["samples"] = [
+        {
+            "angle": angle,
+            "amplitude": 4.8 if angle >= 357 or angle <= 2 else 0.4,
+        }
+        for angle in range(360)
+    ]
+    request["angleOffset"] = 5
+
+    response = httpx.post(f"{API_URL}/api/readings/analyze", json=request, timeout=10)
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["angleOffset"] == 5
+    assert len(data["segments"]) == 1
+    segment = data["segments"][0]
+    # The cross-zero run 357..2 rotates into an interior 2..7 run.
+    assert segment["startAngle"] == 2
+    assert segment["endAngle"] == 7
+    assert segment["span"] == 6
+    assert segment["angles"] == [2, 3, 4, 5, 6, 7]
+    assert segment["startAngle"] <= segment["endAngle"]
+    # Equal amplitudes tie on the smallest display angle; source maps back.
+    assert segment["peakAngle"] == 2
+    assert segment["sourcePeakAngle"] == 357
+    assert segment["sourceAngles"] == [357, 358, 359, 0, 1, 2]
+
+
+def test_live_baseline_is_paired_by_source_angle_before_offset_rotation():
+    request = {
+        "threshold": 2.5,
+        "samples": [
+            {"angle": angle, "amplitude": 3.0 if angle == 0 else 0.0}
+            for angle in range(360)
+        ],
+        "baseline": [
+            {"angle": angle, "value": 1.0 if angle == 5 else 0.0}
+            for angle in range(360)
+        ],
+        "angleOffset": 5,
+    }
+
+    response = httpx.post(f"{API_URL}/api/readings/analyze", json=request, timeout=10)
+
+    assert response.status_code == 200
+    data = response.json()
+    segment = data["segments"][0]
+    # The defect at source 0 lands on display 5 and keeps baseline 0.0; had the
+    # baseline been matched by display angle it would have been suppressed.
+    assert segment["peakAngle"] == 5
+    assert segment["sourcePeakAngle"] == 0
+    assert segment["peakAmplitude"] == pytest.approx(3.0)
+    by_display = {point["angle"]: point for point in data["points"]}
+    assert by_display[5]["sourceAngle"] == 0
+    assert by_display[5]["baseline"] == 0.0
+    assert by_display[10]["sourceAngle"] == 5
+    assert by_display[10]["baseline"] == 1.0
+
+
+def test_live_illegal_angle_offset_returns_field_feedback():
+    for bad_offset in (1.5, 360, -360):
+        request = payload()
+        request["angleOffset"] = bad_offset
+        response = httpx.post(
+            f"{API_URL}/api/readings/analyze", json=request, timeout=10
+        )
+        assert response.status_code == 422
+        fields = {error["field"] for error in response.json()["errors"]}
+        assert fields == {"angleOffset"}
+
+
+def test_live_omitted_angle_offset_matches_legacy_segment_data():
+    legacy = httpx.post(
+        f"{API_URL}/api/readings/analyze", json=payload(), timeout=10
+    ).json()
+    explicit_zero_request = payload()
+    explicit_zero_request["angleOffset"] = 0
+    explicit_zero = httpx.post(
+        f"{API_URL}/api/readings/analyze", json=explicit_zero_request, timeout=10
+    ).json()
+
+    assert "angleOffset" not in legacy
+    assert "angleOffset" not in explicit_zero
+    assert explicit_zero["segments"] == legacy["segments"]
+    assert "sourceAngles" not in legacy["segments"][0]
+
+
+
 def test_live_valid_baseline_suppresses_background_noise():
     request = compensated_payload()
     for sample in request["samples"]:

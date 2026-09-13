@@ -1,4 +1,5 @@
 import json
+from dataclasses import replace
 from decimal import Decimal
 
 from fastapi import FastAPI, Request
@@ -10,7 +11,7 @@ from .calibration import (
     evaluate_calibration,
     validate_calibration_payload,
 )
-from .core import Number, Segment, corrected_amplitude, find_segments
+from .core import Number, Reading, Segment, corrected_amplitude, find_segments
 from .validation import ValidatedPayload, field_error, validate_payload
 
 
@@ -52,7 +53,38 @@ def parse_json_constant(value: str) -> float:
     return float(value)
 
 
-def segment_to_dict(segment: Segment, baseline_applied: bool) -> dict[str, object]:
+def normalize_angle(angle: int, offset: int) -> int:
+    """Apply the field zero re-mark offset as a circular 0..359 rotation.
+
+    The displayed angle is the encoder (source) angle shifted by the offset;
+    Python ``%`` keeps negative offsets on the circle instead of drifting to
+    negative values.
+    """
+
+    return (angle + offset) % 360
+
+
+def rotate_readings(readings: list[Reading], offset: int) -> list[Reading]:
+    """Move readings onto the on-site marked coordinates.
+
+    Rotation runs strictly after baseline pairing and corrected-amplitude
+    computation, so the values riding each angle are untouched and only their
+    angle coordinate changes.
+    """
+
+    if offset == 0:
+        return readings
+    return [
+        replace(reading, angle=normalize_angle(reading.angle, offset))
+        for reading in readings
+    ]
+
+
+def segment_to_dict(
+    segment: Segment,
+    baseline_applied: bool,
+    offset: int | None = None,
+) -> dict[str, object]:
     data: dict[str, object] = {
         "startAngle": segment.start_angle,
         "endAngle": segment.end_angle,
@@ -74,13 +106,24 @@ def segment_to_dict(segment: Segment, baseline_applied: bool) -> dict[str, objec
             if segment.peak_baseline is not None
             else None
         )
+    if offset:
+        # The angles above are displayed (on-site marked) angles; the source*
+        # fields map every boundary and the peak back onto encoder coordinates
+        # so the original sample stays traceable.
+        data["sourceStartAngle"] = normalize_angle(segment.start_angle, -offset)
+        data["sourceEndAngle"] = normalize_angle(segment.end_angle, -offset)
+        data["sourcePeakAngle"] = normalize_angle(segment.peak_angle, -offset)
+        data["sourceAngles"] = [normalize_angle(angle, -offset) for angle in segment.angles]
     return data
 
 
-def points_to_dict(payload: ValidatedPayload) -> list[dict[str, object]]:
-    return [
-        {
-            "angle": reading.angle,
+def points_to_dict(
+    payload: ValidatedPayload,
+    offset: int | None = None,
+) -> list[dict[str, object]]:
+    points: list[dict[str, object]] = []
+    for reading in payload.readings:
+        point: dict[str, object] = {
             "amplitude": response_number(reading.amplitude),
             "baseline": (
                 response_number(reading.baseline)
@@ -91,8 +134,15 @@ def points_to_dict(payload: ValidatedPayload) -> list[dict[str, object]]:
                 corrected_amplitude(reading.amplitude, reading.baseline)
             ),
         }
-        for reading in payload.readings
-    ]
+        if offset:
+            # Baseline and values stay paired by source angle; only the angle
+            # coordinate is reported in display space, with sourceAngle kept.
+            point["sourceAngle"] = reading.angle
+            point["angle"] = normalize_angle(reading.angle, offset)
+        else:
+            point["angle"] = reading.angle
+        points.append(point)
+    return points
 
 
 async def parse_json_body(request: Request) -> tuple[object | None, JSONResponse | None]:
@@ -135,17 +185,25 @@ async def analyze_readings(request: Request) -> JSONResponse:
         return JSONResponse(status_code=422, content={"errors": errors})
 
     assert payload is not None
-    segments = find_segments(payload.readings, payload.threshold)
+    # Baseline is paired against the original (source) angles and corrected
+    # amplitudes are computed first; only then are readings rotated onto the
+    # on-site marked coordinates, so compensation never follows display space.
+    offset = payload.angle_offset or 0
+    rotated = rotate_readings(payload.readings, offset)
+    segments = find_segments(rotated, payload.threshold)
     content: dict[str, object] = {
         "threshold": response_number(payload.threshold),
         "sampleCount": 360,
         "baselineApplied": payload.baseline_applied,
         "segments": [
-            segment_to_dict(segment, payload.baseline_applied) for segment in segments
+            segment_to_dict(segment, payload.baseline_applied, payload.angle_offset)
+            for segment in segments
         ],
     }
+    if payload.angle_offset:
+        content["angleOffset"] = payload.angle_offset
     if payload.baseline_applied:
-        content["points"] = points_to_dict(payload)
+        content["points"] = points_to_dict(payload, payload.angle_offset)
     return JSONResponse(content=content)
 
 

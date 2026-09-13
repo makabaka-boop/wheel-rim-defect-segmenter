@@ -13,6 +13,7 @@ class ValidatedPayload:
     threshold: Number
     readings: list[Reading]
     baseline_applied: bool = False
+    angle_offset: int | None = None
 
 
 def field_error(field: str, message: str) -> dict[str, str]:
@@ -50,6 +51,21 @@ def validate_payload(
             errors.append(field_error("threshold", "阈值必须是有限数字"))
         elif threshold < 0:
             errors.append(field_error("threshold", "阈值必须是非负数"))
+
+    # angleOffset is optional; an omitted/null field keeps the legacy request
+    # shape. A present value must be a whole integer within a single turn so
+    # the zero re-mark stays an exact rotation by whole sampling steps.
+    angle_offset: int | None = None
+    if "angleOffset" in raw and raw["angleOffset"] is not None:
+        angle_offset_value = raw["angleOffset"]
+        if not isinstance(angle_offset_value, int) or isinstance(angle_offset_value, bool):
+            errors.append(field_error("angleOffset", "角度偏移必须是整数"))
+        elif not -359 <= angle_offset_value <= 359:
+            errors.append(
+                field_error("angleOffset", "角度偏移必须在 -359 至 359 之间")
+            )
+        else:
+            angle_offset = int(angle_offset_value)
 
     samples = raw.get("samples")
     if "samples" not in raw:
@@ -192,4 +208,5 @@ def validate_payload(
         threshold=raw["threshold"],
         readings=readings,
         baseline_applied=baseline_by_angle is not None,
+        angle_offset=angle_offset,
     ), []

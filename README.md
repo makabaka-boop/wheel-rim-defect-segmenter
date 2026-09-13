@@ -27,6 +27,17 @@
 
 页面默认载入带基线的跨零度样例：`357°..359°` 与 `0°..2°` 的校正幅值均超限。计算结果只有一个连续区段，起点 `357°`、终点 `2°`、跨度 `6`，峰值角 `0°` 的原幅值 `5.1`、基线 `0.3`、校正幅值 `4.8`，可从响应的逐点 `points` 逐项复算。
 
+## 零位角度偏移
+
+现场复核发现编码器零位与轮辋标记错位时，检修员可在判读页的“零位角度偏移”字段填写**整数角度偏移**（`angleOffset`，范围 `-359..359`，留空即不校正），随原始采样与可选基线一次提交，使采样环、区段起止角和峰值角统一落到现场标记坐标。
+
+- 补偿顺序固定为“**先配对基线、计算校正幅值，再整体旋转角度**”：基线始终按原始（来源）角度与采样配对，不会跟随展示坐标错配；随后以 `展示角 = (来源角 + 偏移) mod 360` 做零至三百五十九度环形归一化，再进入现有分段算法。
+- 跨零合段、峰值取值与“峰值并列取最小角”规则保持原语义，只是在展示坐标上执行；因此跨零缺陷可在偏移后变为普通连续区段（如来源 `357..2` 在 `+5` 偏移后成为 `2..7`），全圆结果仍固定为 `0..359`。
+- 提交非零偏移后，区段的 `startAngle` / `endAngle` / `peakAngle` / `angles` 均为展示角，并额外返回 `sourceStartAngle` / `sourceEndAngle` / `sourcePeakAngle` / `sourceAngles` 映射回来源角；顶层回显 `angleOffset`。带基线时逐点 `points` 同样以展示角 `angle` 排列并附 `sourceAngle`，可逐项复算“基线按来源角配对”。
+- 偏移不是整数或超出 `-359..359` 时，422 错误只定位到 `angleOffset` 字段，页面清空结果与高亮。
+- 省略 `angleOffset`（或显式传 `0` / `null`）的旧请求与当前版本完全一致：不返回任何 `source*` / `angleOffset` 字段，区段数据逐字段相等。
+- 页面上修改偏移后旧结果与环形高亮**立即隐藏**，直到重新提交成功才恢复；结果表与采样环使用展示角，点击区段可在峰值明细与弧/点提示中查看峰值来源角。
+
 ## 声程校准
 
 现场更换探头或耦合剂后，检修员需要先用已知厚度的参考试块校准声程。判读台顶部的“声程校准”入口打开独立的校准记录模块（不复用缺陷区段或基线补偿对象）：
@@ -77,11 +88,12 @@ WEB_PORT=18080 API_PORT=18000 docker compose up --build
 
 ### `POST /api/readings/analyze`
 
-请求（`baseline` 可选）：
+请求（`baseline`、`angleOffset` 均可选）：
 
 ```json
 {
   "threshold": 2.5,
+  "angleOffset": 5,
   "samples": [
     { "angle": 0, "amplitude": 5.1 },
     { "angle": 1, "amplitude": 5.18 }
@@ -92,6 +104,25 @@ WEB_PORT=18080 API_PORT=18000 docker compose up --build
   ]
 }
 ```
+
+`angleOffset` 为整数角度偏移（`-359..359`）。服务端先按来源角度配对基线并以 `max(0, 原幅值 - 基线)` 计算校正幅值，再以 `(来源角 + angleOffset) mod 360` 旋转后分段。非零偏移时，区段在常规字段外额外返回展示角到来源角的映射：
+
+```json
+{
+  "startAngle": 2,
+  "endAngle": 7,
+  "span": 6,
+  "peakAngle": 2,
+  "peakAmplitude": 4.8,
+  "angles": [2, 3, 4, 5, 6, 7],
+  "sourceStartAngle": 357,
+  "sourceEndAngle": 2,
+  "sourcePeakAngle": 357,
+  "sourceAngles": [357, 358, 359, 0, 1, 2]
+}
+```
+
+顶层在非零偏移时回显 `angleOffset`；带基线的 `points` 每项追加 `sourceAngle`，其 `angle` 为展示角。省略偏移（或 `0` / `null`）时响应不含任何 `source*` 与 `angleOffset` 字段。
 
 成功响应中的每个区段（提交基线时附带峰值三元组）：
 
@@ -131,7 +162,7 @@ WEB_PORT=18080 API_PORT=18000 docker compose up --build
 }
 ```
 
-后端会定位缺失、重复、越界、非整数、非法幅值、非法阈值和非法基线字段；前端收到校验错误时会清空本次结果和图形高亮。
+后端会定位缺失、重复、越界、非整数、非法幅值、非法阈值、非法偏移和非法基线字段；前端收到校验错误时会清空本次结果和图形高亮。
 
 ### `POST /api/calibrations/evaluate`
 
@@ -239,7 +270,7 @@ WEB_PORT=8080 API_PORT=8000 docker compose run --build e2e
 backend/            FastAPI、环形分段核心算法与声程校准模块
 src/                React 页面、360° SVG 采样环与校准拟合图
 tests/              核心边界、接口和实时联调验收测试
-e2e/                Playwright 声程校准流程（录入、提交、不合格点高亮）
+e2e/                Playwright 声程校准流程与零位偏移验收（录入、提交、跨零段旋转、非法字段反馈）
 docker-compose.yml  api、web、一次性 verify 与 e2e 服务
 verify.Dockerfile   Python 3.12 验收镜像
 e2e.Dockerfile      Playwright 浏览器验收镜像

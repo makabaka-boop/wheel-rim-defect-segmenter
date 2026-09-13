@@ -17,6 +17,12 @@ export interface SegmentResult {
   angles: number[];
   peakRawAmplitude?: number;
   peakBaseline?: number;
+  // Present only when an angleOffset was applied: angles above are displayed
+  // (on-site marked) angles, source* map back to encoder coordinates.
+  sourceStartAngle?: number;
+  sourceEndAngle?: number;
+  sourcePeakAngle?: number;
+  sourceAngles?: number[];
 }
 
 export interface CorrectedPoint {
@@ -24,12 +30,14 @@ export interface CorrectedPoint {
   amplitude: number;
   baseline: number;
   correctedAmplitude: number;
+  sourceAngle?: number;
 }
 
 export interface AnalysisResponse {
   threshold: number;
   sampleCount: number;
   baselineApplied: boolean;
+  angleOffset?: number;
   segments: SegmentResult[];
   points?: CorrectedPoint[];
 }

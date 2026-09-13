@@ -122,6 +122,9 @@ textarea {
 textarea:focus { border-color: #2563eb; box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.14); }
 textarea.invalid { border-color: #dc2626; }
 
+.offset-input { max-width: 320px; margin-top: 2px; }
+.offset-hint { margin: 8px 0 0; font-size: 0.82rem; }
+
 .actions {
   display: flex;
   gap: 12px;
