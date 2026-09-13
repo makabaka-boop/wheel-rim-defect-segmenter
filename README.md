@@ -27,6 +27,17 @@
 
 页面默认载入带基线的跨零度样例：`357°..359°` 与 `0°..2°` 的校正幅值均超限。计算结果只有一个连续区段，起点 `357°`、终点 `2°`、跨度 `6`，峰值角 `0°` 的原幅值 `5.1`、基线 `0.3`、校正幅值 `4.8`，可从响应的逐点 `points` 逐项复算。
 
+## 声程校准
+
+现场更换探头或耦合剂后，检修员需要先用已知厚度的参考试块校准声程。判读台顶部的“声程校准”入口打开独立的校准记录模块（不复用缺陷区段或基线补偿对象）：
+
+- 校准记录包含 `name`（非空记录名称）、`tolerance`（允许残差，正有限数，单位 µs）和 `points`（**3 至 8 个**测点）。
+- `points[*].thickness` 为试块厚度（mm），`points[*].travelTime` 为往返时间（µs），两者都必须是**正有限数**，且所有厚度**互不相同**。
+- 核心按**普通最小二乘**拟合直线 `t = slope·d + zeroOffset`；拟合声速为 `2 / slope`（往返双程），零点偏移为拟合截距。
+- 每个测点返回预测时间与残差；`max|残差| ≤ tolerance` 评定为**合格**，否则为**不合格**；提交评定前记录为**未评定**。
+- 测点不足或超量、厚度重复、退化斜率（斜率非正有限数，无法对应物理声速）、非法容差都会定位到具体字段并返回 422，前端随即清空旧曲线与结论，记录回到未评定。
+- 结果区突出最大绝对残差点（明细行与拟合曲线同步高亮），并给出逐点预测/残差明细，检修员可从返回明细复算结论。
+
 ## 技术栈
 
 - Python 3.12
@@ -122,6 +133,61 @@ WEB_PORT=18080 API_PORT=18000 docker compose up --build
 
 后端会定位缺失、重复、越界、非整数、非法幅值、非法阈值和非法基线字段；前端收到校验错误时会清空本次结果和图形高亮。
 
+### `POST /api/calibrations/evaluate`
+
+请求：
+
+```json
+{
+  "name": "探头更换后参考试块校准",
+  "tolerance": 0.1,
+  "points": [
+    { "thickness": 25, "travelTime": 9.1 },
+    { "thickness": 50, "travelTime": 17.6 },
+    { "thickness": 75, "travelTime": 26.1 },
+    { "thickness": 100, "travelTime": 34.6 },
+    { "thickness": 125, "travelTime": 43.1 }
+  ]
+}
+```
+
+成功响应（`status` 为 `pass` / `fail`，未提交评定时前端显示 `unevaluated`）：
+
+```json
+{
+  "name": "探头更换后参考试块校准",
+  "pointCount": 5,
+  "tolerance": 0.1,
+  "slope": 0.34,
+  "zeroOffset": 0.6,
+  "soundVelocity": 5.8824,
+  "maxAbsResidual": 0.0,
+  "maxResidualIndex": 0,
+  "status": "pass",
+  "points": [
+    {
+      "thickness": 25,
+      "travelTime": 9.1,
+      "predictedTime": 9.1,
+      "residual": 0.0,
+      "withinTolerance": true
+    }
+  ]
+}
+```
+
+非法输入返回 HTTP 422，字段定位与判读接口一致，例如：
+
+```json
+{
+  "errors": [
+    { "field": "points", "message": "points 必须包含 3 至 8 个测点，当前为 2 个" },
+    { "field": "points[0].thickness", "message": "厚度 25 重复，每个测点的厚度必须互异" },
+    { "field": "tolerance", "message": "允许残差必须是正数" }
+  ]
+}
+```
+
 ## 本地开发
 
 创建 Python 虚拟环境：
@@ -155,13 +221,27 @@ npm run build
 
 默认 pytest 会执行核心算法和 FastAPI 测试；跨容器的实时验收测试由 Compose 的 `verify` 服务设置 `VERIFY_LIVE=1` 后运行。
 
+运行 Playwright 端到端流程（本地会自动拉起 uvicorn 与 vite，需要 `npx playwright install chromium` 一次）：
+
+```bash
+npm run test:e2e
+```
+
+也可以在 Compose 网络内对 `api` + `web` 跑一次性的浏览器验收：
+
+```bash
+WEB_PORT=8080 API_PORT=8000 docker compose run --build e2e
+```
+
 ## 项目结构
 
 ```text
-backend/            FastAPI 与环形分段核心算法
-src/                React 页面与 360° SVG 采样环
+backend/            FastAPI、环形分段核心算法与声程校准模块
+src/                React 页面、360° SVG 采样环与校准拟合图
 tests/              核心边界、接口和实时联调验收测试
-docker-compose.yml  api、web 与一次性 verify 服务
+e2e/                Playwright 声程校准流程（录入、提交、不合格点高亮）
+docker-compose.yml  api、web、一次性 verify 与 e2e 服务
 verify.Dockerfile   Python 3.12 验收镜像
+e2e.Dockerfile      Playwright 浏览器验收镜像
 web.Dockerfile      Node/Vite Web 镜像
 ```

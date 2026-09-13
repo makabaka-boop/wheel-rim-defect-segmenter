@@ -109,3 +109,65 @@ export async function analyzeReadings(payload: string): Promise<AnalysisResponse
   }
   return body as AnalysisResponse;
 }
+
+export interface CalibrationPointInput {
+  thickness: number;
+  travelTime: number;
+}
+
+export interface CalibrationRequest {
+  name: string;
+  tolerance: number;
+  points: CalibrationPointInput[];
+}
+
+export type CalibrationStatus = 'unevaluated' | 'pass' | 'fail';
+
+export interface CalibrationFittedPoint {
+  thickness: number;
+  travelTime: number;
+  predictedTime: number;
+  residual: number;
+  withinTolerance: boolean;
+}
+
+export interface CalibrationResponse {
+  name: string;
+  pointCount: number;
+  tolerance: number;
+  slope: number;
+  zeroOffset: number;
+  soundVelocity: number;
+  maxAbsResidual: number;
+  maxResidualIndex: number;
+  status: CalibrationStatus;
+  points: CalibrationFittedPoint[];
+}
+
+export const calibrationSample = (): CalibrationRequest => ({
+  name: '探头更换后参考试块校准',
+  tolerance: 0.1,
+  points: [
+    { thickness: 25, travelTime: 9.1 },
+    { thickness: 50, travelTime: 17.6 },
+    { thickness: 75, travelTime: 26.1 },
+    { thickness: 100, travelTime: 34.6 },
+    { thickness: 125, travelTime: 43.1 },
+  ],
+});
+
+export async function evaluateCalibration(
+  payload: CalibrationRequest,
+): Promise<CalibrationResponse> {
+  const response = await fetch('/api/calibrations/evaluate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+
+  const body = await response.json();
+  if (!response.ok) {
+    throw body.errors ?? [{ field: 'request', message: '接口返回未知错误' }];
+  }
+  return body as CalibrationResponse;
+}

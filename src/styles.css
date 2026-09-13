@@ -236,6 +236,109 @@ svg { width: 100%; display: block; }
 .legend-normal { background: #94a3b8; }
 .legend-defect { background: #f97316; }
 .legend-selected { background: #facc15; box-shadow: 0 0 0 4px rgba(250, 204, 21, 0.2); }
+.legend-measured { background: #2563eb; }
+.legend-fit { background: #0891b2; border-radius: 3px; height: 5px !important; width: 18px !important; }
+.legend-max-residual { background: #dc2626; box-shadow: 0 0 0 4px rgba(220, 38, 38, 0.18); }
+
+.view-tabs {
+  display: flex;
+  gap: 10px;
+  margin: -6px 0 22px;
+}
+.tab {
+  padding: 10px 22px;
+  border-radius: 999px;
+  color: #1e40af;
+  background: #dbeafe;
+  font-weight: 750;
+}
+.tab--active {
+  color: white;
+  background: linear-gradient(135deg, #2563eb, #0891b2);
+  box-shadow: 0 10px 24px rgba(37, 99, 235, 0.25);
+}
+
+.text-input, .cell-input {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid #cbd5e1;
+  border-radius: 10px;
+  background: white;
+  color: #172033;
+  font: inherit;
+  outline: none;
+}
+.text-input:focus, .cell-input:focus { border-color: #2563eb; box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.14); }
+.text-input.invalid, .cell-input.invalid { border-color: #dc2626; background: #fff5f5; }
+
+.points-heading { margin-top: 18px; align-items: center; }
+.points-heading .field-label { margin: 0; }
+.points-table { min-width: 0; }
+.points-table td, .points-table th { text-align: left; }
+.points-table td:first-child { width: 34px; color: #64748b; font-weight: 700; }
+.field-error-note {
+  margin: 8px 0 0;
+  color: #b91c1c;
+  font-size: 0.88rem;
+  font-weight: 650;
+}
+.row-remove {
+  padding: 6px 14px;
+  border-radius: 999px;
+  color: #b91c1c;
+  background: #fee2e2;
+  font-size: 0.85rem;
+}
+.row-remove:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.status-badge {
+  padding: 6px 16px;
+  border-radius: 999px;
+  font-weight: 800;
+  font-size: 0.95rem;
+}
+.status-badge--unevaluated { color: #475569; background: #e2e8f0; }
+.status-badge--pass { color: #065f46; background: #d1fae5; }
+.status-badge--fail { color: #b91c1c; background: #fee2e2; }
+
+.metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin: 0 0 14px;
+}
+.metrics-grid div {
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: #f1f5f9;
+}
+.metrics-grid .metrics-wide { grid-column: 1 / -1; background: #eff6ff; }
+.metrics-grid dt { color: #64748b; font-size: 0.78rem; font-weight: 700; }
+.metrics-grid dd { margin: 4px 0 0; font-weight: 750; color: #172033; }
+
+.out-row td { color: #b91c1c; }
+.max-residual-row { background: #fef2f2; }
+.max-residual-row td:first-child { color: #b91c1c; font-weight: 800; }
+
+.cal-grid line { stroke: #e2e8f0; stroke-width: 1; }
+.cal-grid text { fill: #64748b; font-size: 12px; }
+.cal-axis { stroke: #94a3b8; stroke-width: 1.6; }
+.cal-axis-title { fill: #475569; font-size: 14px; font-weight: 700; }
+.cal-fit-line { stroke: #0891b2; stroke-width: 2.6; }
+.cal-residual-line { stroke: #94a3b8; stroke-width: 1.4; stroke-dasharray: 4 4; }
+.cal-residual-line--out { stroke: #dc2626; }
+.cal-point { fill: #2563eb; stroke: white; stroke-width: 2; }
+.cal-point--out { fill: #f97316; }
+.cal-point--max { fill: #dc2626; }
+.cal-point-halo { fill: rgba(220, 38, 38, 0.18); stroke: #dc2626; stroke-width: 1.6; }
+.chart-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 320px;
+  padding: 24px;
+  text-align: center;
+}
 
 @media (max-width: 1120px) {
   .workspace { grid-template-columns: 1fr; }

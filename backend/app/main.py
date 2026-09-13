@@ -5,6 +5,11 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from .calibration import (
+    CalibrationResult,
+    evaluate_calibration,
+    validate_calibration_payload,
+)
 from .core import Number, Segment, corrected_amplitude, find_segments
 from .validation import ValidatedPayload, field_error, validate_payload
 
@@ -90,11 +95,17 @@ def points_to_dict(payload: ValidatedPayload) -> list[dict[str, object]]:
     ]
 
 
-@app.post("/api/readings/analyze")
-async def analyze_readings(request: Request) -> JSONResponse:
+async def parse_json_body(request: Request) -> tuple[object | None, JSONResponse | None]:
+    """Read and decode the request body as JSON.
+
+    Returns ``(raw, None)`` on success, otherwise ``(None, response)`` with a
+    422 field error localized to ``request`` so both endpoints report empty
+    and malformed bodies identically.
+    """
+
     body = await request.body()
     if not body:
-        return JSONResponse(
+        return None, JSONResponse(
             status_code=422,
             content={"errors": [field_error("request", "请求体不能为空，需要 JSON 数据")]},
         )
@@ -106,10 +117,18 @@ async def analyze_readings(request: Request) -> JSONResponse:
             parse_constant=parse_json_constant,
         )
     except (ValueError, UnicodeDecodeError) as exc:
-        return JSONResponse(
+        return None, JSONResponse(
             status_code=422,
             content={"errors": [field_error("request", f"JSON 格式非法：{exc}")]},
         )
+    return raw, None
+
+
+@app.post("/api/readings/analyze")
+async def analyze_readings(request: Request) -> JSONResponse:
+    raw, error_response = await parse_json_body(request)
+    if error_response is not None:
+        return error_response
 
     payload, errors = validate_payload(raw)
     if errors:
@@ -128,3 +147,41 @@ async def analyze_readings(request: Request) -> JSONResponse:
     if payload.baseline_applied:
         content["points"] = points_to_dict(payload)
     return JSONResponse(content=content)
+
+
+def calibration_to_dict(result: CalibrationResult) -> dict[str, object]:
+    return {
+        "name": result.name,
+        "pointCount": len(result.points),
+        "tolerance": result.tolerance,
+        "slope": result.slope,
+        "zeroOffset": result.zero_offset,
+        "soundVelocity": result.sound_velocity,
+        "maxAbsResidual": result.max_abs_residual,
+        "maxResidualIndex": result.max_residual_index,
+        "status": result.status,
+        "points": [
+            {
+                "thickness": point.thickness,
+                "travelTime": point.travel_time,
+                "predictedTime": point.predicted_time,
+                "residual": point.residual,
+                "withinTolerance": point.within_tolerance,
+            }
+            for point in result.points
+        ],
+    }
+
+
+@app.post("/api/calibrations/evaluate")
+async def evaluate_calibration_record(request: Request) -> JSONResponse:
+    raw, error_response = await parse_json_body(request)
+    if error_response is not None:
+        return error_response
+
+    record, errors = validate_calibration_payload(raw)
+    if errors:
+        return JSONResponse(status_code=422, content={"errors": errors})
+
+    assert record is not None
+    return JSONResponse(content=calibration_to_dict(evaluate_calibration(record)))

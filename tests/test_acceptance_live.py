@@ -176,7 +176,8 @@ def test_live_compensated_margin_below_one_billionth_still_detects():
     body = (
         '{"threshold": 0.2000000001, '
         f'"samples": {json.dumps(samples)}, '
-        f'"baseline": {json.dumps(baseline)}}'
+        f'"baseline": {json.dumps(baseline)}'
+        '}'
     )
 
     response = httpx.post(
@@ -223,3 +224,71 @@ def test_live_illegal_baseline_returns_field_feedback():
     assert "baseline[0].angle" in fields
     assert "baseline[1].angle" in fields
     assert "baseline[2].value" in fields
+
+
+def calibration_payload() -> dict:
+    # travelTime = 0.34 * thickness + 0.6, a steel-like reference block.
+    return {
+        "name": "探头更换后参考试块校准",
+        "tolerance": 0.1,
+        "points": [
+            {"thickness": 25, "travelTime": 9.1},
+            {"thickness": 50, "travelTime": 17.6},
+            {"thickness": 75, "travelTime": 26.1},
+            {"thickness": 100, "travelTime": 34.6},
+            {"thickness": 125, "travelTime": 43.1},
+        ],
+    }
+
+
+def test_live_calibration_exact_line_is_rated_pass():
+    response = httpx.post(
+        f"{API_URL}/api/calibrations/evaluate", json=calibration_payload(), timeout=10
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "pass"
+    assert data["pointCount"] == 5
+    assert data["slope"] == pytest.approx(0.34)
+    assert data["zeroOffset"] == pytest.approx(0.6)
+    assert data["soundVelocity"] == pytest.approx(2.0 / 0.34)
+    assert data["maxAbsResidual"] == pytest.approx(0.0, abs=1e-9)
+    assert all(point["withinTolerance"] for point in data["points"])
+
+
+def test_live_calibration_single_outlier_is_rated_fail_and_recomputable():
+    request = calibration_payload()
+    request["points"][2]["travelTime"] = 26.4  # 75 mm point out of tolerance
+
+    response = httpx.post(f"{API_URL}/api/calibrations/evaluate", json=request, timeout=10)
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "fail"
+    assert data["maxResidualIndex"] == 2
+    for point in data["points"]:
+        predicted = data["slope"] * point["thickness"] + data["zeroOffset"]
+        assert point["predictedTime"] == pytest.approx(predicted)
+        assert point["residual"] == pytest.approx(point["travelTime"] - predicted)
+    residuals = [abs(point["residual"]) for point in data["points"]]
+    assert data["maxAbsResidual"] == pytest.approx(max(residuals))
+    assert data["points"][2]["thickness"] == 75
+    assert data["points"][2]["withinTolerance"] is False
+
+
+def test_live_calibration_validation_errors_are_localized():
+    bad = calibration_payload()
+    bad["tolerance"] = 0
+    bad["points"].pop()  # 4 -> still valid count; drop to 2 below
+    bad["points"] = bad["points"][:2]  # only 2 points
+    bad["points"][1]["thickness"] = bad["points"][0]["thickness"]  # duplicate
+
+    response = httpx.post(f"{API_URL}/api/calibrations/evaluate", json=bad, timeout=10)
+
+    assert response.status_code == 422
+    fields = {error["field"] for error in response.json()["errors"]}
+    assert "tolerance" in fields
+    assert "points" in fields
+    assert "points[0].thickness" in fields
+    assert "points[1].thickness" in fields

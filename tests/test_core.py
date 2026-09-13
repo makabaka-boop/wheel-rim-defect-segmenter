@@ -1,4 +1,5 @@
 import math
+from decimal import Decimal
 
 import pytest
 
@@ -166,15 +167,15 @@ def test_core_rejects_missing_duplicate_out_of_range_and_illegal_amplitude():
 
 
 def test_corrected_amplitude_clamps_at_zero_and_passes_through_without_baseline():
+    from decimal import Decimal
+
     assert corrected_amplitude(4.8, None) == 4.8
-    assert corrected_amplitude(4.8, 1.2) == pytest.approx(3.6)
+    assert corrected_amplitude(4.8, 1.2) == Decimal("3.6")
     assert corrected_amplitude(0.5, 1.2) == 0.0
     assert corrected_amplitude(1.2, 1.2) == 0.0
 
 
 def test_corrected_amplitude_subtraction_is_decimal_exact():
-    from decimal import Decimal
-
     assert corrected_amplitude(0.3, 0.1) == Decimal("0.2")
     assert corrected_amplitude(0.3, 0.0999999998) == Decimal("0.2000000002")
     assert isinstance(corrected_amplitude(0.3, None), float)
@@ -206,7 +207,7 @@ def test_baseline_wrap_segment_uses_corrected_amplitudes_and_keeps_raw_peak():
     assert segment.span == 4
     assert segment.angles == (358, 359, 0, 1)
     assert segment.peak_angle == 0
-    assert segment.peak_amplitude == pytest.approx(5.6)
+    assert segment.peak_amplitude == Decimal("5.6")
     assert segment.peak_raw_amplitude == pytest.approx(6.6)
     assert segment.peak_baseline == pytest.approx(1.0)
 
@@ -266,7 +267,7 @@ def test_corrected_amplitude_threshold_exact_boundary_survives_float_residue():
     assert segment.end_angle == 0
     assert segment.span == 1
     assert segment.peak_angle == 0
-    assert segment.peak_amplitude == pytest.approx(0.2)
+    assert segment.peak_amplitude == Decimal("0.2")
     assert segment.peak_raw_amplitude == pytest.approx(0.3)
     assert segment.peak_baseline == pytest.approx(0.1)
 
@@ -288,7 +289,7 @@ def test_corrected_amplitude_barely_above_threshold_below_one_billionth():
     segment = segments[0]
     assert segment.span == 1
     assert segment.start_angle == 0
-    assert segment.peak_amplitude == pytest.approx(0.2000000002)
+    assert segment.peak_amplitude == Decimal("0.2000000002")
     assert segment.peak_amplitude > 0.2000000001
 
 

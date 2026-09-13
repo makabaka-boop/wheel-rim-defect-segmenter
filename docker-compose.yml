@@ -51,3 +51,18 @@ services:
         condition: service_healthy
     command: ["pytest", "-q"]
     restart: "no"
+
+  e2e:
+    profiles: ["e2e"]
+    build:
+      context: .
+      dockerfile: e2e.Dockerfile
+    environment:
+      E2E_BASE_URL: http://web:5173
+    depends_on:
+      api:
+        condition: service_healthy
+      web:
+        condition: service_healthy
+    command: ["npx", "playwright", "test"]
+    restart: "no"

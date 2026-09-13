@@ -309,7 +309,8 @@ def test_compensated_margin_below_one_billionth_still_detects_segment():
     body = (
         '{"threshold": 0.2000000001, '
         f'"samples": {json.dumps(samples)}, '
-        f'"baseline": {json.dumps(baseline)}}'
+        f'"baseline": {json.dumps(baseline)}'
+        '}'
     )
 
     response = client.post(
@@ -340,7 +341,8 @@ def test_compensated_margin_below_threshold_does_not_false_alarm():
     body = (
         '{"threshold": 0.2000000003, '
         f'"samples": {json.dumps(samples)}, '
-        f'"baseline": {json.dumps(baseline)}}'
+        f'"baseline": {json.dumps(baseline)}'
+        '}'
     )
 
     response = client.post(
