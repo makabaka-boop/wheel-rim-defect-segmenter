@@ -38,6 +38,33 @@
 - 省略 `angleOffset`（或显式传 `0` / `null`）的旧请求与当前版本完全一致：不返回任何 `source*` / `angleOffset` 字段，区段数据逐字段相等。
 - 页面上修改偏移后旧结果与环形高亮**立即隐藏**，直到重新提交成功才恢复；结果表与采样环使用展示角，点击区段可在峰值明细与弧/点提示中查看峰值来源角。
 
+## 遮挡区间（不可判读角区）
+
+现场复核轮辋时，螺栓孔或夹具遮挡会形成已确认的不可判读角区。检修员可在判读页填写**至多 8 个遮挡区间**（`occlusions`），随采样一次提交：
+
+- 每个区间以**展示角**的整数起止点表示（`start` / `end`，`0..359`），按**顺时针闭区间**计算；起止相同只遮挡一个点，起点大于终点跨零。
+- 跨零与重叠区间先合并为角度集合，这些点标为**未判读**并从既有环形分段计算中剔除：幅值再高也不进入任何区段与峰值，区段不能跨越遮挡点连接（单点遮挡会把原区段确定性拆成两段）。
+- 提交区间后，响应顶层返回按 `0..359` 排序的 `occludedAngles` 合并遮挡角；区段、峰值、基线与来源角明细规则不变。
+- 端点非整数、越界、条目超量或结构错误会定位到 `occlusions` / `occlusions[i].start` / `occlusions[i].end` 字段并返回 422；页面立即隐藏旧区段和高亮，同时保留输入供检修员修正。
+- 省略 `occlusions`（或显式传 `null`）的旧请求与当前版本逐字段一致：不返回 `occludedAngles`，区段数据完全相等。
+- 采样环以独立斜纹纹理标出遮挡范围（弧带与采样点），选中区段时现有峰值、基线和来源角明细保持不变。
+
+请求示例：
+
+```json
+{
+  "threshold": 2.5,
+  "samples": [ { "angle": 0, "amplitude": 5.1 } ],
+  "occlusions": [ { "start": 358, "end": 0 }, { "start": 45, "end": 45 } ]
+}
+```
+
+对应响应顶层附带：
+
+```json
+{ "occludedAngles": [0, 45, 358, 359] }
+```
+
 ## 声程校准
 
 现场更换探头或耦合剂后，检修员需要先用已知厚度的参考试块校准声程。判读台顶部的“声程校准”入口打开独立的校准记录模块（不复用缺陷区段或基线补偿对象）：
@@ -88,7 +115,7 @@ WEB_PORT=18080 API_PORT=18000 docker compose up --build
 
 ### `POST /api/readings/analyze`
 
-请求（`baseline`、`angleOffset` 均可选）：
+请求（`baseline`、`angleOffset`、`occlusions` 均可选）：
 
 ```json
 {
@@ -270,7 +297,7 @@ WEB_PORT=8080 API_PORT=8000 docker compose run --build e2e
 backend/            FastAPI、环形分段核心算法与声程校准模块
 src/                React 页面、360° SVG 采样环与校准拟合图
 tests/              核心边界、接口和实时联调验收测试
-e2e/                Playwright 声程校准流程与零位偏移验收（录入、提交、跨零段旋转、非法字段反馈）
+e2e/                Playwright 声程校准流程、零位偏移与遮挡区间验收（录入、提交、跨零段旋转/拆分、非法字段反馈）
 docker-compose.yml  api、web、一次性 verify 与 e2e 服务
 verify.Dockerfile   Python 3.12 验收镜像
 e2e.Dockerfile      Playwright 浏览器验收镜像

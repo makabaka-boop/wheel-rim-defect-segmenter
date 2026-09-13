@@ -14,6 +14,10 @@ class ValidatedPayload:
     readings: list[Reading]
     baseline_applied: bool = False
     angle_offset: int | None = None
+    # Confirmed unreadable intervals as (start, end) display-angle pairs;
+    # ``None`` means the field was omitted and the legacy response shape is
+    # kept.
+    occlusions: list[tuple[int, int]] | None = None
 
 
 def field_error(field: str, message: str) -> dict[str, str]:
@@ -33,6 +37,27 @@ def is_finite_number(value: object) -> bool:
         )
     except OverflowError:
         return False
+
+
+def _validate_occlusion_endpoint(
+    item: Mapping,
+    key: str,
+    base_path: str,
+    errors: list[dict[str, str]],
+) -> int | None:
+    """Validate one interval endpoint, localizing errors to its own field."""
+
+    if key not in item:
+        errors.append(field_error(f"{base_path}.{key}", f"缺少 {key} 字段"))
+        return None
+    value = item[key]
+    if not isinstance(value, int) or isinstance(value, bool):
+        errors.append(field_error(f"{base_path}.{key}", f"{key} 必须是整数"))
+        return None
+    if not 0 <= value <= 359:
+        errors.append(field_error(f"{base_path}.{key}", f"{key} 必须在 0 至 359 之间"))
+        return None
+    return int(value)
 
 
 def validate_payload(
@@ -186,6 +211,34 @@ def validate_payload(
                 int(item["angle"]): item["value"] for item in baseline
             }
 
+    # occlusions is optional; an omitted/null field keeps the legacy request
+    # shape. Each interval is a clockwise closed pair of integer display
+    # angles (start == end occludes exactly that one point), and at most
+    # eight intervals may be submitted per reading.
+    occlusions: list[tuple[int, int]] | None = None
+    if "occlusions" in raw and raw["occlusions"] is not None:
+        occlusions = []
+        occlusions_raw = raw["occlusions"]
+        if not isinstance(occlusions_raw, list):
+            errors.append(field_error("occlusions", "occlusions 必须是数组"))
+        else:
+            if len(occlusions_raw) > 8:
+                errors.append(
+                    field_error(
+                        "occlusions",
+                        f"occlusions 至多包含 8 个遮挡区间，当前为 {len(occlusions_raw)} 个",
+                    )
+                )
+            for index, item in enumerate(occlusions_raw):
+                base_path = f"occlusions[{index}]"
+                if not isinstance(item, Mapping):
+                    errors.append(field_error(base_path, "该遮挡区间必须是 JSON 对象"))
+                    continue
+                start = _validate_occlusion_endpoint(item, "start", base_path, errors)
+                end = _validate_occlusion_endpoint(item, "end", base_path, errors)
+                if start is not None and end is not None:
+                    occlusions.append((start, end))
+
     if errors:
         return None, errors
 
@@ -209,4 +262,5 @@ def validate_payload(
         readings=readings,
         baseline_applied=baseline_by_angle is not None,
         angle_offset=angle_offset,
+        occlusions=occlusions,
     ), []

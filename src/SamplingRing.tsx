@@ -10,6 +10,9 @@ interface SamplingRingProps {
   // Non-zero when every displayed angle is rotated by the field zero offset;
   // tooltips then expose the source (encoder) angle alongside it.
   angleOffset?: number;
+  // Merged unreadable display angles from submitted occlusion intervals;
+  // rendered with an independent hatch texture, never as defective points.
+  occludedAngles?: number[];
 }
 
 const size = 640;
@@ -28,6 +31,7 @@ const pointPosition = (angle: number, radius = ringRadius) => {
 };
 
 const segmentArcRadius = ringRadius - 31;
+const occlusionArcRadius = ringRadius + 17;
 
 const describeArc = (startAngle: number, span: number, radius: number): string => {
   if (span >= 360) {
@@ -60,19 +64,38 @@ export default function SamplingRing({
   threshold,
   points = null,
   angleOffset = 0,
+  occludedAngles = [],
 }: SamplingRingProps) {
   const byAngle = new Map(samples.map((sample) => [sample.angle, sample.amplitude]));
   const pointByAngle = new Map((points ?? []).map((point) => [point.angle, point]));
   const defectiveAngles = new Set(segments.flatMap((segment) => segment.angles));
+  const occluded = new Set(occludedAngles);
   const selected = selectedIndex === null ? null : segments[selectedIndex] ?? null;
   const selectedAngles = selected ? angleSet(selected) : new Set<number>();
   const ticks = Array.from({ length: 36 }, (_, index) => index * 10);
+
+  // Maximal clockwise runs of occluded angles, drawn as one hatched arc per
+  // run so the unreadable range reads as a single texture band.
+  const occludedRuns: { start: number; span: number }[] = [];
+  if (occluded.size === 360) {
+    occludedRuns.push({ start: 0, span: 360 });
+  } else if (occluded.size > 0) {
+    for (const angle of occluded) {
+      if (occluded.has((angle + 359) % 360)) continue;
+      let span = 1;
+      while (span < 360 && occluded.has((angle + span) % 360)) span += 1;
+      occludedRuns.push({ start: angle, span });
+    }
+  }
 
   const sourceSuffix = (sourceAngle: number | undefined): string =>
     angleOffset !== 0 && sourceAngle !== undefined ? `（原始来源角 ${sourceAngle}°）` : '';
 
   const sampleTitle = (angle: number, defective: boolean): string => {
     const point = pointByAngle.get(angle);
+    if (occluded.has(angle)) {
+      return `展示角 ${angle}°，遮挡未判读（不参与区段计算）${sourceSuffix(point?.sourceAngle)}`;
+    }
     const status = `${defective ? '，缺陷' : ''}${sourceSuffix(point?.sourceAngle)}`;
     if (point) {
       return (
@@ -90,8 +113,21 @@ export default function SamplingRing({
       <svg viewBox={`0 0 ${size} ${size}`} role="img" aria-labelledby="ring-title ring-desc">
         <title id="ring-title">360 条轮对超声采样构成的环形图</title>
         <desc id="ring-desc">
-          灰色圆点表示非缺陷点，橙色点表示达到阈值的缺陷点。选中的连续区段以黄色弧和放大点突出。
+          灰色圆点表示非缺陷点，橙色点表示达到阈值的缺陷点，斜纹点表示遮挡未判读点。选中的连续区段以黄色弧和放大点突出。
         </desc>
+
+        <defs>
+          <pattern
+            id="occlusion-hatch"
+            width="5"
+            height="5"
+            patternUnits="userSpaceOnUse"
+            patternTransform="rotate(45)"
+          >
+            <rect width="5" height="5" fill="#e2e8f0" />
+            <line x1="0" y1="0" x2="0" y2="5" stroke="#64748b" strokeWidth="1.6" />
+          </pattern>
+        </defs>
 
         <circle cx={center} cy={center} r={outerRadius} className="ring-outline" />
         <circle cx={center} cy={center} r={innerRadius} className="ring-outline" />
@@ -115,21 +151,61 @@ export default function SamplingRing({
         {Array.from({ length: 360 }, (_, angle) => {
           const point = pointPosition(angle, ringRadius);
           const inSelected = selectedAngles.has(angle);
-          const defective = defectiveAngles.has(angle);
+          const isOccluded = occluded.has(angle);
+          const defective = !isOccluded && defectiveAngles.has(angle);
           return (
             <circle
               key={angle}
               cx={point.x}
               cy={point.y}
-              r={inSelected ? 4 : defective ? 2.8 : 1.55}
+              r={inSelected ? 4 : defective ? 2.8 : isOccluded ? 2.4 : 1.55}
               className={[
                 'sample-dot',
-                defective ? 'sample-dot--defect' : 'sample-dot--normal',
+                isOccluded
+                  ? 'sample-dot--occluded'
+                  : defective
+                    ? 'sample-dot--defect'
+                    : 'sample-dot--normal',
                 inSelected ? 'sample-dot--selected' : '',
               ].join(' ')}
             >
               <title>{sampleTitle(angle, defective)}</title>
             </circle>
+          );
+        })}
+
+        {occludedRuns.map((run) => {
+          const title = (
+            <title>
+              {run.span === 1
+                ? `遮挡未判读：展示角 ${run.start}°`
+                : `遮挡未判读：展示角 ${run.start}° 起顺时针 ${run.span} 点`}
+            </title>
+          );
+          if (run.span === 1) {
+            // A one-point occlusion collapses the arc path into its start
+            // point, so draw a hatched round marker instead.
+            const marker = pointPosition(run.start, occlusionArcRadius);
+            return (
+              <circle
+                key={`occluded-${run.start}`}
+                cx={marker.x}
+                cy={marker.y}
+                r="7"
+                className="occlusion-arc occlusion-arc--point"
+              >
+                {title}
+              </circle>
+            );
+          }
+          return (
+            <path
+              key={`occluded-${run.start}-${run.span}`}
+              d={describeArc(run.start, run.span, occlusionArcRadius)}
+              className="occlusion-arc"
+            >
+              {title}
+            </path>
           );
         })}
 

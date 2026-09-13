@@ -19,6 +19,16 @@ const initialPayload = () => {
 // previous result immediately and the error is pinned to the field.
 const OFFSET_PATTERN = /^-?\d+$/;
 
+const MAX_OCCLUSIONS = 8;
+
+interface OcclusionRow {
+  id: number;
+  start: string;
+  end: string;
+}
+
+let nextOcclusionRowId = 1;
+
 function segmentText(segment: SegmentResult): string {
   return segment.startAngle === segment.endAngle
     ? `${segment.startAngle}°`
@@ -28,6 +38,8 @@ function segmentText(segment: SegmentResult): string {
 export default function AnalyzePanel() {
   const [payload, setPayload] = useState(initialPayload);
   const [angleOffset, setAngleOffset] = useState('');
+  const [occlusionRows, setOcclusionRows] = useState<OcclusionRow[]>([]);
+  const [occludedAngles, setOccludedAngles] = useState<number[]>([]);
   const [segments, setSegments] = useState<SegmentResult[]>([]);
   const [samples, setSamples] = useState<ReadingInput[]>(() => wrapCompensatedSample().samples);
   const [points, setPoints] = useState<CorrectedPoint[] | null>(null);
@@ -55,6 +67,7 @@ export default function AnalyzePanel() {
     setErrors([]);
     setSubmitted(false);
     setAppliedOffset(0);
+    setOccludedAngles([]);
   };
 
   const clearResult = () => {
@@ -72,6 +85,7 @@ export default function AnalyzePanel() {
     setSelectedIndex(null);
     setSubmitted(false);
     setAppliedOffset(0);
+    setOccludedAngles([]);
 
     let parsed: { samples?: ReadingInput[]; angleOffset?: number };
     try {
@@ -100,13 +114,63 @@ export default function AnalyzePanel() {
       }
     }
 
+    // Occlusion rows are validated against the same contract as the API so a
+    // bad endpoint is pinned to its own field while the typed values stay in
+    // place for correction. Row index matches the submitted interval index.
+    const occlusionErrors: FieldError[] = [];
+    const intervals: { start: number; end: number }[] = [];
+    if (occlusionRows.length > MAX_OCCLUSIONS) {
+      occlusionErrors.push({
+        field: 'occlusions',
+        message: `occlusions 至多包含 ${MAX_OCCLUSIONS} 个遮挡区间，当前为 ${occlusionRows.length} 个`,
+      });
+    }
+    occlusionRows.forEach((row, index) => {
+      const endpoints: { key: 'start' | 'end'; text: string }[] = [
+        { key: 'start', text: row.start.trim() },
+        { key: 'end', text: row.end.trim() },
+      ];
+      const parsedEndpoints: Partial<Record<'start' | 'end', number>> = {};
+      for (const { key, text } of endpoints) {
+        if (!OFFSET_PATTERN.test(text)) {
+          occlusionErrors.push({
+            field: `occlusions[${index}].${key}`,
+            message: `${key} 必须是整数`,
+          });
+          continue;
+        }
+        const value = Number(text);
+        if (!Number.isSafeInteger(value) || value < 0 || value > 359) {
+          occlusionErrors.push({
+            field: `occlusions[${index}].${key}`,
+            message: `${key} 必须在 0 至 359 之间`,
+          });
+          continue;
+        }
+        parsedEndpoints[key] = value;
+      }
+      if (parsedEndpoints.start !== undefined && parsedEndpoints.end !== undefined) {
+        intervals.push({ start: parsedEndpoints.start, end: parsedEndpoints.end });
+      }
+    });
+    if (occlusionErrors.length > 0) {
+      setErrors(occlusionErrors);
+      setSubmitting(false);
+      return;
+    }
+
     try {
-      // Omit the field entirely when left blank so legacy payloads stay byte-for-byte
-      // compatible; the baseline keeps pairing against source angles server-side.
+      // Omit the optional fields entirely when left blank so legacy payloads
+      // stay byte-for-byte compatible; the baseline keeps pairing against
+      // source angles server-side and occlusions apply in display space.
       const requestPayload =
-        offsetText === ''
+        offsetText === '' && intervals.length === 0
           ? payload
-          : JSON.stringify({ ...parsed, angleOffset: submittedOffset });
+          : JSON.stringify({
+              ...parsed,
+              ...(offsetText === '' ? {} : { angleOffset: submittedOffset }),
+              ...(intervals.length === 0 ? {} : { occlusions: intervals }),
+            });
       const result = await analyzeReadings(requestPayload);
       // The ring places dots by the response's display coordinates, so rotate
       // the raw sample ring in lockstep with the offset the server actually
@@ -125,6 +189,7 @@ export default function AnalyzePanel() {
       setBaselineApplied(result.baselineApplied);
       setThreshold(result.threshold);
       setAppliedOffset(result.angleOffset ?? 0);
+      setOccludedAngles(result.occludedAngles ?? []);
       setSubmitted(true);
       setSelectedIndex(result.segments.length === 0 ? null : 0);
     } catch (receivedErrors) {
@@ -144,6 +209,29 @@ export default function AnalyzePanel() {
     setPayload(serializeSamples(exampleSamples, baseline));
     setAngleOffset('');
     clearResult();
+  };
+
+  // Editing, adding or removing an occlusion interval makes the previous
+  // judgment stale exactly like editing the payload does: results and ring
+  // highlight hide immediately while the typed endpoints stay for correction.
+  const updateOcclusionRow = (id: number, key: 'start' | 'end', value: string) => {
+    setOcclusionRows((rows) =>
+      rows.map((row) => (row.id === id ? { ...row, [key]: value } : row)),
+    );
+    hideStaleResult();
+  };
+
+  const addOcclusionRow = () => {
+    setOcclusionRows((rows) => [
+      ...rows,
+      { id: (nextOcclusionRowId += 1), start: '', end: '' },
+    ]);
+    hideStaleResult();
+  };
+
+  const removeOcclusionRow = (id: number) => {
+    setOcclusionRows((rows) => rows.filter((row) => row.id !== id));
+    hideStaleResult();
   };
 
   const selectedSegment = selectedIndex === null ? null : segments[selectedIndex] ?? null;
@@ -209,6 +297,70 @@ export default function AnalyzePanel() {
           <p className="muted offset-hint">
             修改偏移后旧结果立即隐藏并清除高亮，重新提交成功才恢复；基线仍按原始角度配对，不随展示坐标错配。
           </p>
+          <label className="field-label">
+            遮挡区间 occlusions（至多 {MAX_OCCLUSIONS} 个；整数展示角 0–359，顺时针闭区间，起止相同仅遮挡该点）
+          </label>
+          <div className="occlusion-rows">
+            {occlusionRows.map((row, index) => (
+              <div className="occlusion-row" key={row.id}>
+                <input
+                  data-testid={`occlusion-start-${index}`}
+                  type="text"
+                  inputMode="numeric"
+                  className={[
+                    'text-input',
+                    'occlusion-input',
+                    errorFields.has(`occlusions[${index}].start`) ? 'invalid' : '',
+                  ]
+                    .filter(Boolean)
+                    .join(' ')}
+                  value={row.start}
+                  placeholder="起点"
+                  aria-label={`遮挡区间 ${index + 1} 起点`}
+                  onChange={(event) => updateOcclusionRow(row.id, 'start', event.target.value)}
+                  spellCheck={false}
+                />
+                <span className="occlusion-arrow">→</span>
+                <input
+                  data-testid={`occlusion-end-${index}`}
+                  type="text"
+                  inputMode="numeric"
+                  className={[
+                    'text-input',
+                    'occlusion-input',
+                    errorFields.has(`occlusions[${index}].end`) ? 'invalid' : '',
+                  ]
+                    .filter(Boolean)
+                    .join(' ')}
+                  value={row.end}
+                  placeholder="终点"
+                  aria-label={`遮挡区间 ${index + 1} 终点`}
+                  onChange={(event) => updateOcclusionRow(row.id, 'end', event.target.value)}
+                  spellCheck={false}
+                />
+                <button
+                  type="button"
+                  className="occlusion-remove"
+                  onClick={() => removeOcclusionRow(row.id)}
+                >
+                  删除
+                </button>
+              </div>
+            ))}
+          </div>
+          <div className="actions">
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={addOcclusionRow}
+              disabled={occlusionRows.length >= MAX_OCCLUSIONS}
+            >
+              添加遮挡区间
+            </button>
+          </div>
+          <p className="muted offset-hint">
+            螺栓孔或夹具遮挡的角区标为未判读并从区段计算中剔除；跨零与重叠区间会合并。填写或修改后旧结果立即隐藏，重新提交成功才恢复。
+          </p>
           <div className="actions">
             <button type="button" className="primary-button" onClick={submit} disabled={submitting}>
               {submitting ? '判读中…' : '提交判读'}
@@ -243,6 +395,15 @@ export default function AnalyzePanel() {
                 <p className="table-note" data-testid="offset-note">
                   当前角度已按零位偏移 {appliedOffset > 0 ? `+${appliedOffset}` : appliedOffset}°
                   环形归一化到现场标记坐标（0°–359°）；基线按原始角度配对后再校正。
+                </p>
+              )}
+              {occludedAngles.length > 0 && (
+                <p className="table-note" data-testid="occlusion-note">
+                  已合并遮挡 {occludedAngles.length} 个展示角（未判读，不参与区段计算）：
+                  {occludedAngles.length <= 12
+                    ? `${occludedAngles.join('°、')}°`
+                    : '范围详见采样环纹理'}
+                  。
                 </p>
               )}
               {segments.length === 0 ? (
@@ -310,11 +471,13 @@ export default function AnalyzePanel() {
           threshold={threshold}
           points={points}
           angleOffset={appliedOffset}
+          occludedAngles={occludedAngles}
         />
         <div className="legend panel">
           <span><i className="legend-normal" />非缺陷采样</span>
           <span><i className="legend-defect" />缺陷采样</span>
           <span><i className="legend-selected" />当前选中区段</span>
+          <span><i className="legend-occluded" />遮挡未判读</span>
         </div>
       </div>
     </section>

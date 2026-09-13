@@ -5,7 +5,7 @@ Angles use degrees and are represented as integers in the inclusive range
 ``(359, 0)``.
 """
 
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from decimal import Decimal
 import math
@@ -111,7 +111,31 @@ def _validate_readings(readings: Sequence[Reading], threshold: Number) -> list[N
     return list(amplitudes)
 
 
-def find_segments(readings: Sequence[Reading], threshold: Number) -> list[Segment]:
+def _validate_occluded(occluded: Collection[int] | None) -> frozenset[int]:
+    """Return the confirmed unreadable display angles as a set.
+
+    Occluded points (bolt holes, fixture shadows) are excluded from the ring
+    segmentation: they never count as defective and segments cannot connect
+    across them.
+    """
+
+    if occluded is None:
+        return frozenset()
+    angles: set[int] = set()
+    for angle in occluded:
+        if not isinstance(angle, int) or isinstance(angle, bool):
+            raise ValueError("occluded angle must be an integer")
+        if not 0 <= angle <= 359:
+            raise ValueError(f"occluded angle {angle} is outside 0..359")
+        angles.add(angle)
+    return frozenset(angles)
+
+
+def find_segments(
+    readings: Sequence[Reading],
+    threshold: Number,
+    occluded: Collection[int] | None = None,
+) -> list[Segment]:
     """Return defective clockwise segments.
 
     A sample is defective when its amplitude is greater than or equal to
@@ -122,6 +146,11 @@ def find_segments(readings: Sequence[Reading], threshold: Number) -> list[Segmen
     the first defective angle after a non-defective angle while moving
     clockwise. This makes a segment crossing zero start in the high-angle
     tail, for example ``358 -> 359 -> 0 -> 1``.
+
+    ``occluded`` holds confirmed unreadable display angles. They are treated
+    as non-defective gaps: their amplitudes never enter any segment and a
+    segment never connects across them, so a single occluded point splits a
+    formerly continuous run deterministically.
     """
 
     # Compare in decimal space whenever baseline compensation is involved so
@@ -133,13 +162,17 @@ def find_segments(readings: Sequence[Reading], threshold: Number) -> list[Segmen
         else threshold
     )
     amplitudes = _validate_readings(readings, threshold)
+    occluded_angles = _validate_occluded(occluded)
     raw_by_angle = {reading.angle: reading.amplitude for reading in readings}
     baseline_by_angle = {
         reading.angle: reading.baseline
         for reading in readings
         if reading.baseline is not None
     }
-    defective = [amplitude >= compare_threshold for amplitude in amplitudes]
+    defective = [
+        amplitude >= compare_threshold and angle not in occluded_angles
+        for angle, amplitude in enumerate(amplitudes)
+    ]
 
     def build_segment(start: int, end: int, angles: list[int]) -> Segment:
         # The explicit minimum angle resolves equal peak amplitudes even when

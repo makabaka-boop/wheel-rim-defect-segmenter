@@ -312,3 +312,56 @@ def test_core_rejects_illegal_baseline():
 
     with pytest.raises(ValueError, match="baseline"):
         find_segments(make_compensated_readings(baselines=make_baselines({0: math.nan})), 1.0)
+
+
+def test_occluded_points_are_excluded_and_break_connectivity():
+    readings = make_readings({angle: 3.0 for angle in range(10, 21)})
+
+    segments = find_segments(readings, 2.5, occluded={15})
+
+    assert [(segment.start_angle, segment.end_angle, segment.span) for segment in segments] == [
+        (10, 14, 5),
+        (16, 20, 5),
+    ]
+    assert all(15 not in segment.angles for segment in segments)
+
+
+def test_occlusion_turns_full_circle_into_one_open_segment():
+    readings = make_readings(default=3.0)
+
+    segments = find_segments(readings, 2.5, occluded={100})
+
+    assert len(segments) == 1
+    segment = segments[0]
+    assert segment.start_angle == 101
+    assert segment.end_angle == 99
+    assert segment.span == 359
+    assert 100 not in segment.angles
+
+
+def test_occluding_every_defective_point_returns_no_segments():
+    readings = make_readings({358: 4.0, 359: 4.0, 0: 4.0})
+
+    assert find_segments(readings, 2.5, occluded={358, 359, 0}) == []
+
+
+def test_occluded_peak_candidate_does_not_drive_peak_selection():
+    readings = make_readings({10: 3.0, 11: 9.9, 12: 4.0})
+
+    segments = find_segments(readings, 2.5, occluded={11})
+
+    assert [(s.start_angle, s.end_angle) for s in segments] == [(10, 10), (12, 12)]
+    assert all(segment.peak_amplitude < 9.9 for segment in segments)
+
+
+def test_core_rejects_illegal_occluded_angles():
+    readings = make_readings({0: 3.0})
+
+    with pytest.raises(ValueError, match="integer"):
+        find_segments(readings, 2.5, occluded={1.5})  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError, match="outside"):
+        find_segments(readings, 2.5, occluded={360})
+
+    with pytest.raises(ValueError, match="integer"):
+        find_segments(readings, 2.5, occluded={True})

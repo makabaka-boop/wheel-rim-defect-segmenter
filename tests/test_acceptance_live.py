@@ -382,3 +382,94 @@ def test_live_calibration_validation_errors_are_localized():
     assert "points" in fields
     assert "points[0].thickness" in fields
     assert "points[1].thickness" in fields
+
+
+def occlusion_payload() -> dict:
+    amplitudes = {357: 4.8, 358: 5.9, 359: 5.5, 0: 5.1, 1: 4.6, 2: 4.4}
+    return {
+        "threshold": 2.5,
+        "samples": [
+            {"angle": angle, "amplitude": amplitudes.get(angle, 0.4)}
+            for angle in range(360)
+        ],
+    }
+
+
+def test_live_cross_zero_occlusion_merges_and_excludes_high_amplitudes():
+    request = occlusion_payload()
+    request["occlusions"] = [{"start": 358, "end": 0}]
+    response = httpx.post(f"{API_URL}/api/readings/analyze", json=request, timeout=10)
+
+    assert response.status_code == 200
+    data = response.json()
+    # The cross-zero interval merges into one angle set sorted 0..359.
+    assert data["occludedAngles"] == [0, 358, 359]
+    segments = data["segments"]
+    assert [(s["startAngle"], s["endAngle"], s["span"]) for s in segments] == [
+        (1, 2, 2),
+        (357, 357, 1),
+    ]
+    # The loudest points (5.9/5.5/5.1) are occluded and never enter results.
+    assert all(segment["peakAmplitude"] < 5.0 for segment in segments)
+    covered = {angle for segment in segments for angle in segment["angles"]}
+    assert covered.isdisjoint({0, 358, 359})
+
+
+def test_live_single_point_occlusion_splits_segment_deterministically():
+    request = occlusion_payload()
+    request["occlusions"] = [{"start": 0, "end": 0}]
+    response = httpx.post(f"{API_URL}/api/readings/analyze", json=request, timeout=10)
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["occludedAngles"] == [0]
+    segments = data["segments"]
+    assert [(s["startAngle"], s["endAngle"], s["span"]) for s in segments] == [
+        (1, 2, 2),
+        (357, 359, 3),
+    ]
+    assert segments[1]["angles"] == [357, 358, 359]
+    assert segments[0]["angles"] == [1, 2]
+
+
+def test_live_illegal_occlusion_endpoint_returns_field_feedback():
+    request = occlusion_payload()
+    request["occlusions"] = [{"start": 1.5, "end": 10}, {"start": 5, "end": 360}]
+    response = httpx.post(f"{API_URL}/api/readings/analyze", json=request, timeout=10)
+
+    assert response.status_code == 422
+    fields = {error["field"] for error in response.json()["errors"]}
+    assert "occlusions[0].start" in fields
+    assert "occlusions[1].end" in fields
+
+    request = occlusion_payload()
+    request["occlusions"] = [{"start": angle, "end": angle} for angle in range(9)]
+    response = httpx.post(f"{API_URL}/api/readings/analyze", json=request, timeout=10)
+    assert response.status_code == 422
+    fields = {error["field"] for error in response.json()["errors"]}
+    assert "occlusions" in fields
+
+
+def test_live_request_without_occlusions_matches_legacy_response():
+    response = httpx.post(
+        f"{API_URL}/api/readings/analyze", json=occlusion_payload(), timeout=10
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert set(data.keys()) == {"threshold", "sampleCount", "baselineApplied", "segments"}
+    assert "occludedAngles" not in data
+    assert len(data["segments"]) == 1
+    segment = data["segments"][0]
+    assert set(segment.keys()) == {
+        "startAngle",
+        "endAngle",
+        "span",
+        "peakAngle",
+        "peakAmplitude",
+        "angles",
+    }
+    assert (segment["startAngle"], segment["endAngle"], segment["span"]) == (357, 2, 6)
+    assert segment["angles"] == [357, 358, 359, 0, 1, 2]
+    assert segment["peakAngle"] == 358
+    assert segment["peakAmplitude"] == pytest.approx(5.9)

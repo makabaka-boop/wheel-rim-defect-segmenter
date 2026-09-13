@@ -40,6 +40,9 @@ export interface AnalysisResponse {
   angleOffset?: number;
   segments: SegmentResult[];
   points?: CorrectedPoint[];
+  // Present only when occlusion intervals were submitted: the merged
+  // unreadable display angles, sorted 0..359.
+  occludedAngles?: number[];
 }
 
 export interface FieldError {

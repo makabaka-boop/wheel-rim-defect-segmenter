@@ -80,6 +80,26 @@ def rotate_readings(readings: list[Reading], offset: int) -> list[Reading]:
     ]
 
 
+def occluded_angle_set(occlusions: list[tuple[int, int]] | None) -> set[int]:
+    """Merge clockwise closed occlusion intervals into one display-angle set.
+
+    Each interval walks clockwise from ``start`` to ``end`` inclusive, so a
+    start past its end wraps through 0° and ``start == end`` occludes exactly
+    that one point. Overlapping and cross-zero intervals merge naturally in
+    the set.
+    """
+
+    angles: set[int] = set()
+    for start, end in occlusions or []:
+        angle = start
+        while True:
+            angles.add(angle)
+            if angle == end:
+                break
+            angle = (angle + 1) % 360
+    return angles
+
+
 def segment_to_dict(
     segment: Segment,
     baseline_applied: bool,
@@ -194,7 +214,10 @@ async def analyze_readings(request: Request) -> JSONResponse:
     # on-site marked coordinates, so compensation never follows display space.
     offset = payload.angle_offset or 0
     rotated = rotate_readings(payload.readings, offset)
-    segments = find_segments(rotated, payload.threshold)
+    # Occlusion intervals are already expressed in display angles, so they
+    # apply after the rotation, on the same coordinates the segments use.
+    occluded = occluded_angle_set(payload.occlusions)
+    segments = find_segments(rotated, payload.threshold, occluded=occluded)
     content: dict[str, object] = {
         "threshold": response_number(payload.threshold),
         "sampleCount": 360,
@@ -204,6 +227,10 @@ async def analyze_readings(request: Request) -> JSONResponse:
             for segment in segments
         ],
     }
+    if payload.occlusions is not None:
+        # The merged unreadable angles, sorted 0..359, so the page can mark
+        # the occluded range independently of the defective segments.
+        content["occludedAngles"] = sorted(occluded)
     if payload.angle_offset:
         content["angleOffset"] = payload.angle_offset
     if payload.baseline_applied:
