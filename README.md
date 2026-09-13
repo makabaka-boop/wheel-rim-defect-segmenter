@@ -33,7 +33,7 @@
 
 - 补偿顺序固定为“**先配对基线、计算校正幅值，再整体旋转角度**”：基线始终按原始（来源）角度与采样配对，不会跟随展示坐标错配；随后以 `展示角 = (来源角 + 偏移) mod 360` 做零至三百五十九度环形归一化，再进入现有分段算法。
 - 跨零合段、峰值取值与“峰值并列取最小角”规则保持原语义，只是在展示坐标上执行；因此跨零缺陷可在偏移后变为普通连续区段（如来源 `357..2` 在 `+5` 偏移后成为 `2..7`），全圆结果仍固定为 `0..359`。
-- 提交非零偏移后，区段的 `startAngle` / `endAngle` / `peakAngle` / `angles` 均为展示角，并额外返回 `sourceStartAngle` / `sourceEndAngle` / `sourcePeakAngle` / `sourceAngles` 映射回来源角；顶层回显 `angleOffset`。带基线时逐点 `points` 同样以展示角 `angle` 排列并附 `sourceAngle`，可逐项复算“基线按来源角配对”。
+- 提交非零偏移后，区段的 `startAngle` / `endAngle` / `peakAngle` / `angles` 均为展示角，并额外返回 `sourceStartAngle` / `sourceEndAngle` / `sourcePeakAngle` / `sourceAngles` 映射回来源角；顶层回显 `angleOffset`。带基线时逐点 `points` 同样以展示角 `angle` 按 0°–359° 顺序排列并附 `sourceAngle`，可逐项复算“基线按来源角配对”。
 - 偏移不是整数或超出 `-359..359` 时，422 错误只定位到 `angleOffset` 字段，页面清空结果与高亮。
 - 省略 `angleOffset`（或显式传 `0` / `null`）的旧请求与当前版本完全一致：不返回任何 `source*` / `angleOffset` 字段，区段数据逐字段相等。
 - 页面上修改偏移后旧结果与环形高亮**立即隐藏**，直到重新提交成功才恢复；结果表与采样环使用展示角，点击区段可在峰值明细与弧/点提示中查看峰值来源角。

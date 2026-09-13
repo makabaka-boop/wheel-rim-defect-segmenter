@@ -142,6 +142,10 @@ def points_to_dict(
         else:
             point["angle"] = reading.angle
         points.append(point)
+    # Points are always reported walking the display circle 0..359. Readings
+    # arrive sorted by source angle, so a zero re-mark rotation would
+    # otherwise wrap the tail (e.g. 5..359, 0..4) instead of starting at 0.
+    points.sort(key=lambda point: point["angle"])
     return points
 
 

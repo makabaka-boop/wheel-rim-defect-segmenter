@@ -526,6 +526,41 @@ def test_compensated_wrap_sample_with_offset_keeps_pointwise_recomputability():
     assert segment["peakBaseline"] == pytest.approx(baselines[357])
 
 
+def test_compensated_points_with_offset_are_ordered_by_display_angle():
+    # With a +5 zero re-mark the compensated points must walk the display
+    # circle 0..359 instead of starting at 5 and wrapping back to zero at the
+    # tail; the sourceAngle mapping still pairs every point back to its
+    # encoder angle.
+    payload = compensated_payload()
+    payload["angleOffset"] = 5
+    response = client.post("/api/readings/analyze", json=payload)
+
+    assert response.status_code == 200
+    points = response.json()["points"]
+    assert [point["angle"] for point in points] == list(range(360))
+    assert [point["sourceAngle"] for point in points] == [
+        (angle - 5) % 360 for angle in range(360)
+    ]
+    # Baseline pairing stays on source angles: display 0 carries source 355's
+    # values, display 5 carries source 0's.
+    samples = {sample["angle"]: sample["amplitude"] for sample in payload["samples"]}
+    assert points[0]["amplitude"] == samples[355]
+    assert points[5]["amplitude"] == samples[0]
+
+
+def test_compensated_points_with_negative_offset_are_ordered_by_display_angle():
+    payload = compensated_payload()
+    payload["angleOffset"] = -7
+    response = client.post("/api/readings/analyze", json=payload)
+
+    assert response.status_code == 200
+    points = response.json()["points"]
+    assert [point["angle"] for point in points] == list(range(360))
+    assert [point["sourceAngle"] for point in points] == [
+        (angle + 7) % 360 for angle in range(360)
+    ]
+
+
 def test_illegal_angle_offset_is_localized_to_the_field():
     cases = [
         (1.5, "整数"),

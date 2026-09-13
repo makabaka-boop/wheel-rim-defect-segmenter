@@ -42,9 +42,10 @@ export default function AnalyzePanel() {
   const errorFields = useMemo(() => new Set(errors.map((error) => error.field)), [errors]);
   const offsetInvalid = errorFields.has('angleOffset');
 
-  // Touching the offset makes the previous judgment stale: its angles no longer
-  // match the field. Results and highlight stay hidden until a successful
-  // resubmission; the raw JSON and samples themselves are left untouched.
+  // Editing the payload or the offset makes the previous judgment stale: its
+  // angles no longer match the inputs. Results and highlight stay hidden until
+  // a successful resubmission; the raw JSON and samples themselves are left
+  // untouched.
   const hideStaleResult = () => {
     setSegments([]);
     setPoints(null);
@@ -108,12 +109,15 @@ export default function AnalyzePanel() {
           : JSON.stringify({ ...parsed, angleOffset: submittedOffset });
       const result = await analyzeReadings(requestPayload);
       // The ring places dots by the response's display coordinates, so rotate
-      // the raw sample ring in lockstep; baseline pairing itself stayed on
-      // source angles server-side.
+      // the raw sample ring in lockstep with the offset the server actually
+      // applied and echoed back: the offset-box value when set, otherwise the
+      // payload's own angleOffset. Baseline pairing itself stayed on source
+      // angles server-side.
+      const effectiveOffset = result.angleOffset ?? 0;
       setSamples(
         (parsed.samples ?? []).map((sample) => ({
           ...sample,
-          angle: (((sample.angle + submittedOffset) % 360) + 360) % 360,
+          angle: (((sample.angle + effectiveOffset) % 360) + 360) % 360,
         })),
       );
       setSegments(result.segments);
@@ -176,7 +180,10 @@ export default function AnalyzePanel() {
             id="payload"
             className={errorFields.has('request') || errorFields.has('$') ? 'invalid' : ''}
             value={payload}
-            onChange={(event) => setPayload(event.target.value)}
+            onChange={(event) => {
+              setPayload(event.target.value);
+              hideStaleResult();
+            }}
             spellCheck={false}
             rows={20}
           />
@@ -229,7 +236,7 @@ export default function AnalyzePanel() {
         <div className="panel results-panel">
           <h2>连续区段结果</h2>
           {!submitted ? (
-            <p className="muted">提交合法数据后显示计算结果。每次输入失败都会清空现有结果和图形高亮。</p>
+            <p className="muted">提交合法数据后显示计算结果。修改输入或校验失败都会立即隐藏现有结果和图形高亮。</p>
           ) : (
             <>
               {appliedOffset !== 0 && (
